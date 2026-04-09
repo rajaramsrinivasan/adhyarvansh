@@ -1,0 +1,15 @@
+name = "adhyarvansh"
+main = "worker.js"
+compatibility_date = "2024-11-01"
+compatibility_flags = ["nodejs_compat"]
+
+[[kv_namespaces]]
+binding = "KV"
+id = "7c579310b59741bcac3ae85846f0fcee"
+
+[triggers]
+crons = ["0 4 * * *"]
+
+[vars]
+APP_NAME = "Adhyarvansh"
+APP_VERSION = "1.0.0"
