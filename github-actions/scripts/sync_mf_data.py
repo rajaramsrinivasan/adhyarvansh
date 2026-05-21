@@ -1,221 +1,171 @@
 """
-sync_mf_data.py
-Fetches all Indian mutual fund NAVs from mfapi.in
-Calculates 1Y / 3Y / 5Y CAGR returns
-Stores everything in Neon PostgreSQL mf_cache table
+sync_mf_data.py  —  Fast async MF sync
+Uses 40 parallel requests — syncs ~6000 equity/hybrid funds in ~10-15 minutes
+Writes to Cloudflare D1 via REST API
 
-Run: python sync_mf_data.py
-Schedule: GitHub Actions cron — daily 8 AM IST (2:30 AM UTC)
+GitHub Secrets needed:
+  CF_ACCOUNT_ID   — Cloudflare account ID
+  CF_API_TOKEN    — Cloudflare API token (D1:Edit permission)
+  D1_DATABASE_ID  — D1 database ID
 """
 
-import os
-import json
-import time
-import logging
-import psycopg2
-import psycopg2.extras
-import requests
-from datetime import datetime, date, timedelta
+import os, json, time, logging, asyncio, aiohttp
+from datetime import datetime
 from dateutil.relativedelta import relativedelta
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger(__name__)
 
-DATABASE_URL = os.environ["DATABASE_URL"]
-MFAPI_BASE   = "https://api.mfapi.in/mf"
+CF_ACCOUNT_ID  = os.environ["CF_ACCOUNT_ID"]
+CF_API_TOKEN   = os.environ["CF_API_TOKEN"]
+D1_DATABASE_ID = os.environ["D1_DATABASE_ID"]
 
-# ── Helpers ───────────────────────────────────────────────────────────────────
+D1_URL     = f"https://api.cloudflare.com/client/v4/accounts/{CF_ACCOUNT_ID}/d1/database/{D1_DATABASE_ID}/query"
+MFAPI_BASE = "https://api.mfapi.in/mf"
 
-def get_conn():
-    return psycopg2.connect(DATABASE_URL, cursor_factory=psycopg2.extras.RealDictCursor)
+TARGET_CATEGORIES = {"Equity", "Hybrid"}
+MAX_FUNDS   = 6000
+CONCURRENCY = 40
 
-def fetch_json(url, retries=3, delay=2):
-    for i in range(retries):
-        try:
-            r = requests.get(url, timeout=15)
-            r.raise_for_status()
-            return r.json()
-        except Exception as e:
-            if i < retries - 1:
-                log.warning(f"Retry {i+1} for {url}: {e}")
-                time.sleep(delay)
-            else:
-                raise
 
-def calc_cagr(nav_history, years):
-    """
-    Calculate CAGR over given years using NAV history.
-    nav_history: list of {"date": "DD-MM-YYYY", "nav": "123.45"} sorted newest first
-    Returns CAGR % rounded to 2 decimal places, or None if not enough history
-    """
-    if not nav_history or len(nav_history) < 2:
+async def d1_upsert(session, row):
+    headers = {"Authorization": f"Bearer {CF_API_TOKEN}", "Content-Type": "application/json"}
+    body = {
+        "sql": """INSERT INTO mf_cache
+            (scheme_code,fund_name,category,sub_category,amc_name,
+             latest_nav,nav_date,return_1y,return_3y,return_5y,last_synced)
+          VALUES (?,?,?,?,?,?,?,?,?,?,datetime('now'))
+          ON CONFLICT(scheme_code) DO UPDATE SET
+            fund_name=excluded.fund_name, category=excluded.category,
+            sub_category=excluded.sub_category, amc_name=excluded.amc_name,
+            latest_nav=excluded.latest_nav, nav_date=excluded.nav_date,
+            return_1y=excluded.return_1y, return_3y=excluded.return_3y,
+            return_5y=excluded.return_5y, last_synced=excluded.last_synced""",
+        "params": [row["scheme_code"], row["fund_name"], row["category"],
+                   row["sub_category"], row["amc_name"], row["latest_nav"],
+                   row["nav_date"], row["return_1y"], row["return_3y"], row["return_5y"]]
+    }
+    async with session.post(D1_URL, headers=headers, json=body) as r:
+        data = await r.json()
+        if not data.get("success"):
+            raise Exception(str(data.get("errors", "")))
+
+
+def calc_cagr(nav_data, years):
+    if not nav_data or len(nav_data) < 2:
         return None
-
     try:
-        latest_nav  = float(nav_history[0]["nav"])
-        latest_date = datetime.strptime(nav_history[0]["date"], "%d-%m-%Y")
+        latest_nav  = float(nav_data[0]["nav"])
+        latest_date = datetime.strptime(nav_data[0]["date"], "%d-%m-%Y")
         target_date = latest_date - relativedelta(years=years)
-
-        # Find the NAV closest to target_date
-        past_nav = None
-        for entry in nav_history:
-            entry_date = datetime.strptime(entry["date"], "%d-%m-%Y")
-            if entry_date <= target_date:
+        for entry in nav_data:
+            d = datetime.strptime(entry["date"], "%d-%m-%Y")
+            if d <= target_date:
                 past_nav = float(entry["nav"])
-                break
-
-        if past_nav is None or past_nav <= 0:
-            return None
-
-        # CAGR = (end/start)^(1/years) - 1
-        cagr = ((latest_nav / past_nav) ** (1 / years) - 1) * 100
-        return round(cagr, 2)
-    except Exception as e:
-        log.debug(f"CAGR calc error: {e}")
+                if past_nav <= 0: return None
+                return round(((latest_nav / past_nav) ** (1 / years) - 1) * 100, 2)
+        return None
+    except Exception:
         return None
 
-def infer_category(scheme_name: str) -> tuple:
-    """Simple rule-based category inference from fund name."""
-    name = scheme_name.upper()
 
-    if any(x in name for x in ["LIQUID", "OVERNIGHT", "MONEY MARKET"]):
-        return "Debt", "Liquid"
-    if any(x in name for x in ["GILT", "G-SEC", "GOVERNMENT"]):
-        return "Debt", "Gilt"
-    if any(x in name for x in ["DEBT", "BOND", "INCOME", "CREDIT RISK", "SHORT TERM", "MEDIUM TERM", "LONG TERM"]):
-        return "Debt", "Debt"
-    if any(x in name for x in ["ARBITRAGE"]):
-        return "Hybrid", "Arbitrage"
-    if any(x in name for x in ["BALANCED ADVANTAGE", "DYNAMIC ASSET"]):
-        return "Hybrid", "Balanced Advantage"
-    if any(x in name for x in ["HYBRID", "BALANCED", "EQUITY SAVINGS", "MULTI ASSET"]):
-        return "Hybrid", "Hybrid"
-    if any(x in name for x in ["INDEX", "NIFTY", "SENSEX", "BSE", "NSE"]):
-        return "Equity", "Index"
-    if any(x in name for x in ["ELSS", "TAX SAVER", "TAX SAVING"]):
-        return "Equity", "ELSS"
-    if any(x in name for x in ["SMALL CAP", "SMALLCAP"]):
-        return "Equity", "Small Cap"
-    if any(x in name for x in ["MID CAP", "MIDCAP"]):
-        return "Equity", "Mid Cap"
-    if any(x in name for x in ["LARGE & MID", "LARGE AND MID"]):
-        return "Equity", "Large & Mid Cap"
-    if any(x in name for x in ["LARGE CAP", "LARGECAP", "BLUECHIP", "BLUE CHIP", "TOP 100", "TOP100"]):
-        return "Equity", "Large Cap"
-    if any(x in name for x in ["FLEXI CAP", "FLEXICAP", "MULTI CAP", "MULTICAP", "DIVERSIFIED"]):
-        return "Equity", "Flexi Cap"
-    if "EQUITY" in name or "GROWTH" in name:
-        return "Equity", "Equity"
-    if any(x in name for x in ["GOLD", "SILVER", "COMMODITY"]):
-        return "Other", "Commodity"
-    if "FOF" in name or "FUND OF FUND" in name:
-        return "Other", "FoF"
-
-    return "Other", "Other"
-
-def extract_amc(scheme_name: str) -> str:
-    """Extract AMC name from fund name."""
-    amcs = [
-        "SBI", "HDFC", "ICICI Prudential", "Axis", "Kotak", "Nippon India",
-        "Mirae Asset", "Canara Robeco", "DSP", "Franklin Templeton", "Tata",
-        "UTI", "Aditya Birla Sun Life", "Sundaram", "Motilal Oswal", "Edelweiss",
-        "Invesco", "PGIM India", "Quant", "WhiteOak", "Parag Parikh", "Navi",
-        "Groww", "Bandhan", "Union", "LIC", "Mahindra Manulife", "JM Financial",
-        "BOI", "Baroda BNP Paribas", "ITI", "360 ONE"
-    ]
-    name_upper = scheme_name.upper()
-    for amc in amcs:
-        if amc.upper() in name_upper:
-            return amc
-    # Try first word as fallback
-    return scheme_name.split()[0] if scheme_name else "Unknown"
+def infer_category(name):
+    n = name.upper()
+    if any(x in n for x in ["LIQUID","OVERNIGHT","MONEY MARKET","ULTRA SHORT"]): return "Debt","Liquid"
+    if any(x in n for x in ["GILT","G-SEC"]): return "Debt","Gilt"
+    if any(x in n for x in ["DEBT","BOND","INCOME","CREDIT RISK","SHORT TERM","MEDIUM TERM"]): return "Debt","Debt"
+    if "ARBITRAGE" in n: return "Hybrid","Arbitrage"
+    if any(x in n for x in ["BALANCED ADVANTAGE","DYNAMIC ASSET"]): return "Hybrid","Balanced Advantage"
+    if any(x in n for x in ["HYBRID","BALANCED","EQUITY SAVINGS","MULTI ASSET"]): return "Hybrid","Hybrid"
+    if any(x in n for x in ["INDEX","NIFTY","SENSEX"]): return "Equity","Index"
+    if any(x in n for x in ["ELSS","TAX SAVER","TAX SAVING"]): return "Equity","ELSS"
+    if any(x in n for x in ["SMALL CAP","SMALLCAP"]): return "Equity","Small Cap"
+    if any(x in n for x in ["MID CAP","MIDCAP"]): return "Equity","Mid Cap"
+    if any(x in n for x in ["LARGE CAP","LARGECAP","BLUECHIP","TOP 100"]): return "Equity","Large Cap"
+    if any(x in n for x in ["FLEXI CAP","FLEXICAP","MULTI CAP","MULTICAP"]): return "Equity","Flexi Cap"
+    if "EQUITY" in n or "GROWTH" in n: return "Equity","Equity"
+    if any(x in n for x in ["GOLD","SILVER"]): return "Other","Commodity"
+    return "Debt","Other"
 
 
-# ── Main sync ─────────────────────────────────────────────────────────────────
+def extract_amc(name):
+    for amc in ["SBI","HDFC","ICICI Prudential","Axis","Kotak","Nippon India",
+                "Mirae Asset","Canara Robeco","DSP","Franklin Templeton","Tata",
+                "UTI","Aditya Birla Sun Life","Sundaram","Motilal Oswal","Quant",
+                "WhiteOak","Parag Parikh","Groww","Bandhan","Edelweiss","Invesco","PGIM India"]:
+        if amc.upper() in name.upper(): return amc
+    return name.split()[0] if name else "Unknown"
 
-def sync_all_funds():
-    log.info("Fetching full fund list from mfapi.in ...")
-    all_funds = fetch_json(MFAPI_BASE)
-    log.info(f"Total funds: {len(all_funds)}")
 
-    conn   = get_conn()
-    cur    = conn.cursor()
-    synced = 0
-    errors = 0
+async def fetch_and_store(session, scheme_code, fund_name, semaphore):
+    async with semaphore:
+        cat, sub = infer_category(fund_name)
+        if cat not in TARGET_CATEGORIES:
+            return False
 
-    for i, fund in enumerate(all_funds):
-        scheme_code = str(fund["schemeCode"])
-        scheme_name = fund["schemeName"]
+        url = f"{MFAPI_BASE}/{scheme_code}"
+        for attempt in range(3):
+            try:
+                async with session.get(url, timeout=aiohttp.ClientTimeout(total=20)) as r:
+                    if r.status != 200: return False
+                    data = await r.json()
+                nav_data = data.get("data", [])
+                if not nav_data: return False
 
-        try:
-            # Fetch NAV history for this fund
-            detail = fetch_json(f"{MFAPI_BASE}/{scheme_code}")
-            nav_data = detail.get("data", [])   # newest first
+                row = {
+                    "scheme_code":  str(scheme_code),
+                    "fund_name":    fund_name,
+                    "category":     cat,
+                    "sub_category": sub,
+                    "amc_name":     extract_amc(fund_name),
+                    "latest_nav":   float(nav_data[0]["nav"]),
+                    "nav_date":     nav_data[0]["date"],
+                    "return_1y":    calc_cagr(nav_data, 1),
+                    "return_3y":    calc_cagr(nav_data, 3),
+                    "return_5y":    calc_cagr(nav_data, 5),
+                }
+                await d1_upsert(session, row)
+                return True
+            except asyncio.TimeoutError:
+                if attempt < 2: await asyncio.sleep(2)
+            except Exception as e:
+                if attempt < 2: await asyncio.sleep(1)
+                else: log.warning(f"Failed {scheme_code}: {e}")
+        return False
 
-            if not nav_data:
-                continue
 
-            latest_nav  = float(nav_data[0]["nav"])
-            nav_date_str = nav_data[0]["date"]
-            nav_date    = datetime.strptime(nav_date_str, "%d-%m-%Y").date()
+async def main():
+    start = time.time()
+    log.info("Starting fast async MF sync...")
 
-            # Calculate returns
-            return_1y = calc_cagr(nav_data, 1)
-            return_3y = calc_cagr(nav_data, 3)
-            return_5y = calc_cagr(nav_data, 5)
+    connector = aiohttp.TCPConnector(limit=CONCURRENCY, ttl_dns_cache=300)
+    async with aiohttp.ClientSession(connector=connector) as session:
+        async with session.get(MFAPI_BASE) as r:
+            all_funds = await r.json()
+        log.info(f"Total funds: {len(all_funds)} — filtering to equity/hybrid...")
 
-            category, sub_category = infer_category(scheme_name)
-            amc_name               = extract_amc(scheme_name)
+        # Pre-filter by name to avoid fetching unwanted funds
+        target = [(f["schemeCode"], f["schemeName"]) for f in all_funds
+                  if infer_category(f["schemeName"])[0] in TARGET_CATEGORIES][:MAX_FUNDS]
+        log.info(f"Processing {len(target)} equity/hybrid funds with {CONCURRENCY} parallel workers")
 
-            # Upsert into mf_cache
-            cur.execute("""
-                INSERT INTO mf_cache
-                    (scheme_code, fund_name, category, sub_category, amc_name,
-                     latest_nav, nav_date, return_1y, return_3y, return_5y, last_synced)
-                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s, NOW())
-                ON CONFLICT (scheme_code) DO UPDATE SET
-                    fund_name    = EXCLUDED.fund_name,
-                    category     = EXCLUDED.category,
-                    sub_category = EXCLUDED.sub_category,
-                    amc_name     = EXCLUDED.amc_name,
-                    latest_nav   = EXCLUDED.latest_nav,
-                    nav_date     = EXCLUDED.nav_date,
-                    return_1y    = EXCLUDED.return_1y,
-                    return_3y    = EXCLUDED.return_3y,
-                    return_5y    = EXCLUDED.return_5y,
-                    last_synced  = NOW()
-            """, (scheme_code, scheme_name, category, sub_category, amc_name,
-                  latest_nav, nav_date, return_1y, return_3y, return_5y))
+        semaphore = asyncio.Semaphore(CONCURRENCY)
+        tasks     = [fetch_and_store(session, code, name, semaphore) for code, name in target]
 
-            synced += 1
+        synced = 0
+        errors = 0
+        batch  = 500
+        for i in range(0, len(tasks), batch):
+            results = await asyncio.gather(*tasks[i:i+batch], return_exceptions=True)
+            synced += sum(1 for r in results if r is True)
+            errors += sum(1 for r in results if r is False or isinstance(r, Exception))
+            elapsed = round(time.time() - start)
+            log.info(f"Progress: {min(i+batch,len(tasks))}/{len(target)} | synced={synced} | {elapsed}s")
 
-            # Commit every 500 funds to avoid huge transactions
-            if synced % 500 == 0:
-                conn.commit()
-                log.info(f"Progress: {synced}/{len(all_funds)} synced ...")
-
-            # Small delay to be polite to mfapi.in
-            time.sleep(0.05)
-
-        except Exception as e:
-            errors += 1
-            log.warning(f"Error syncing {scheme_code} ({scheme_name[:40]}): {e}")
-            conn.rollback()
-            continue
-
-    conn.commit()
-    cur.close()
-    conn.close()
-
-    log.info(f"✅ Sync complete — {synced} funds synced, {errors} errors")
-    return synced, errors
+    total = round(time.time() - start)
+    log.info(f"✅ Done — {synced} funds synced in {total//60}m {total%60}s")
+    return synced
 
 
 if __name__ == "__main__":
-    start = time.time()
-    synced, errors = sync_all_funds()
-    elapsed = round(time.time() - start, 1)
-    log.info(f"Total time: {elapsed}s")
-    if errors > synced * 0.1:   # fail if >10% error rate
-        raise SystemExit(f"Too many errors: {errors}")
-
+    asyncio.run(main())
