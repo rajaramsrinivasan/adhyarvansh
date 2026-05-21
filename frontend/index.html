@@ -1,4 +1,3 @@
-
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -765,11 +764,6 @@
     <div class="auth-logo">Adhy<span>arvansh</span></div>
     <div class="auth-tagline">Your personal mutual fund intelligence platform</div>
 
-    <div class="auth-tabs">
-      <button class="auth-tab active" onclick="switchAuthTab('login')">Sign in</button>
-      <button class="auth-tab" onclick="switchAuthTab('register')">Create account</button>
-    </div>
-
     <div id="auth-error" class="auth-error"></div>
 
     <!-- Login form -->
@@ -785,22 +779,7 @@
       <button class="btn-primary" id="login-btn" onclick="doLogin()">Sign in</button>
     </div>
 
-    <!-- Register form -->
-    <div id="register-form" style="display:none">
-      <div class="field">
-        <label>Full name</label>
-        <input type="text" id="reg-name" placeholder="Your name">
-      </div>
-      <div class="field">
-        <label>Email address</label>
-        <input type="email" id="reg-email" placeholder="you@example.com">
-      </div>
-      <div class="field">
-        <label>Password</label>
-        <input type="password" id="reg-password" placeholder="Min 8 characters">
-      </div>
-      <button class="btn-primary" id="register-btn" onclick="doRegister()">Create account</button>
-    </div>
+<!-- Registration disabled: private app -->
   </div>
 </div>
 
@@ -1047,7 +1026,7 @@
 // ═══════════════════════════════════════════════════════════
 // CONFIG — update this to your Worker URL
 // ═══════════════════════════════════════════════════════════
-const API = 'https://adhyarvansh.pss-rajaram.workers.dev'
+const API = ''
 
 // ── State ──────────────────────────────────────────────────
 let token         = localStorage.getItem('adhy_token')
