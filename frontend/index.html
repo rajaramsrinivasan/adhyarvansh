@@ -1,0 +1,1672 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Adhyarvansh — Mutual Fund Intelligence</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600&family=DM+Serif+Display:ital@0;1&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg:        #F7F7F5;
+    --surface:   #FFFFFF;
+    --border:    #EBEBEB;
+    --text:      #1A1A1A;
+    --muted:     #888888;
+    --accent:    #1B4FD8;
+    --accent-lt: #EEF2FF;
+    --green:     #16A34A;
+    --green-lt:  #DCFCE7;
+    --red:       #DC2626;
+    --red-lt:    #FEE2E2;
+    --amber:     #D97706;
+    --amber-lt:  #FEF3C7;
+    --radius:    12px;
+    --shadow:    0 1px 3px rgba(0,0,0,.06), 0 1px 2px rgba(0,0,0,.04);
+    --shadow-lg: 0 4px 24px rgba(0,0,0,.08);
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    font-family: 'DM Sans', sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    min-height: 100vh;
+    font-size: 14px;
+    line-height: 1.5;
+  }
+
+  /* ── Auth screens ── */
+  #auth-screen {
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--bg);
+    padding: 24px;
+  }
+
+  .auth-card {
+    background: var(--surface);
+    border-radius: 20px;
+    padding: 48px 44px;
+    width: 100%;
+    max-width: 420px;
+    box-shadow: var(--shadow-lg);
+    border: 1px solid var(--border);
+  }
+
+  .auth-logo {
+    font-family: 'DM Serif Display', serif;
+    font-size: 26px;
+    color: var(--text);
+    margin-bottom: 6px;
+  }
+
+  .auth-logo span { color: var(--accent); font-style: italic; }
+
+  .auth-tagline {
+    font-size: 13px;
+    color: var(--muted);
+    margin-bottom: 36px;
+  }
+
+  .auth-tabs {
+    display: flex;
+    border-bottom: 1px solid var(--border);
+    margin-bottom: 28px;
+    gap: 24px;
+  }
+
+  .auth-tab {
+    font-size: 14px;
+    font-weight: 500;
+    color: var(--muted);
+    cursor: pointer;
+    padding-bottom: 12px;
+    border-bottom: 2px solid transparent;
+    transition: all .2s;
+    background: none;
+    border-top: none;
+    border-left: none;
+    border-right: none;
+  }
+
+  .auth-tab.active {
+    color: var(--accent);
+    border-bottom-color: var(--accent);
+  }
+
+  .field { margin-bottom: 18px; }
+
+  .field label {
+    display: block;
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: .5px;
+    margin-bottom: 6px;
+  }
+
+  .field input {
+    width: 100%;
+    padding: 11px 14px;
+    border: 1.5px solid var(--border);
+    border-radius: 8px;
+    font-size: 14px;
+    font-family: 'DM Sans', sans-serif;
+    color: var(--text);
+    background: var(--bg);
+    transition: border-color .2s;
+    outline: none;
+  }
+
+  .field input:focus { border-color: var(--accent); background: #fff; }
+
+  .btn-primary {
+    width: 100%;
+    padding: 13px;
+    background: var(--accent);
+    color: #fff;
+    border: none;
+    border-radius: 8px;
+    font-size: 14px;
+    font-weight: 600;
+    font-family: 'DM Sans', sans-serif;
+    cursor: pointer;
+    transition: opacity .15s;
+    margin-top: 4px;
+  }
+
+  .btn-primary:hover { opacity: .9; }
+  .btn-primary:disabled { opacity: .5; cursor: not-allowed; }
+
+  .auth-error {
+    background: var(--red-lt);
+    color: var(--red);
+    border-radius: 8px;
+    padding: 10px 14px;
+    font-size: 13px;
+    margin-bottom: 16px;
+    display: none;
+  }
+
+  /* ── App shell ── */
+  #app { display: none; min-height: 100vh; }
+
+  .sidebar {
+    position: fixed;
+    left: 0; top: 0; bottom: 0;
+    width: 220px;
+    background: var(--surface);
+    border-right: 1px solid var(--border);
+    padding: 28px 0;
+    z-index: 100;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .sidebar-logo {
+    font-family: 'DM Serif Display', serif;
+    font-size: 20px;
+    padding: 0 24px 28px;
+    border-bottom: 1px solid var(--border);
+    margin-bottom: 16px;
+  }
+
+  .sidebar-logo span { color: var(--accent); font-style: italic; }
+
+  .nav-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 24px;
+    font-size: 13.5px;
+    font-weight: 500;
+    color: var(--muted);
+    cursor: pointer;
+    border-radius: 0;
+    transition: all .15s;
+    border: none;
+    background: none;
+    width: 100%;
+    text-align: left;
+  }
+
+  .nav-item:hover { color: var(--text); background: var(--bg); }
+
+  .nav-item.active {
+    color: var(--accent);
+    background: var(--accent-lt);
+  }
+
+  .nav-icon { font-size: 16px; width: 20px; text-align: center; }
+
+  .sidebar-bottom {
+    margin-top: auto;
+    padding: 16px 24px;
+    border-top: 1px solid var(--border);
+  }
+
+  .user-chip {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 13px;
+  }
+
+  .user-avatar {
+    width: 32px; height: 32px;
+    border-radius: 50%;
+    background: var(--accent);
+    color: #fff;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: 600;
+    font-size: 13px;
+    flex-shrink: 0;
+  }
+
+  .user-name { font-weight: 500; color: var(--text); }
+  .user-email { font-size: 11px; color: var(--muted); }
+
+  .btn-logout {
+    margin-top: 12px;
+    width: 100%;
+    padding: 8px;
+    border: 1px solid var(--border);
+    border-radius: 7px;
+    background: none;
+    font-size: 12px;
+    color: var(--muted);
+    cursor: pointer;
+    font-family: 'DM Sans', sans-serif;
+    transition: all .15s;
+  }
+
+  .btn-logout:hover { border-color: var(--red); color: var(--red); }
+
+  /* ── Main content ── */
+  .main {
+    margin-left: 220px;
+    padding: 32px 36px;
+    min-height: 100vh;
+  }
+
+  .page { display: none; }
+  .page.active { display: block; }
+
+  .page-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 28px;
+  }
+
+  .page-title {
+    font-family: 'DM Serif Display', serif;
+    font-size: 26px;
+    font-weight: 400;
+    color: var(--text);
+  }
+
+  .page-subtitle {
+    font-size: 13px;
+    color: var(--muted);
+    margin-top: 2px;
+  }
+
+  /* ── Summary cards ── */
+  .summary-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 16px;
+    margin-bottom: 28px;
+  }
+
+  .summary-card {
+    background: var(--surface);
+    border-radius: var(--radius);
+    padding: 20px 22px;
+    border: 1px solid var(--border);
+    box-shadow: var(--shadow);
+  }
+
+  .summary-label {
+    font-size: 11px;
+    font-weight: 500;
+    text-transform: uppercase;
+    letter-spacing: .6px;
+    color: var(--muted);
+    margin-bottom: 8px;
+  }
+
+  .summary-value {
+    font-size: 24px;
+    font-weight: 600;
+    color: var(--text);
+    letter-spacing: -.5px;
+  }
+
+  .summary-sub {
+    font-size: 12px;
+    color: var(--muted);
+    margin-top: 3px;
+  }
+
+  .gain { color: var(--green) !important; }
+  .loss { color: var(--red) !important; }
+
+  /* ── Fund cards ── */
+  .funds-controls {
+    display: flex;
+    gap: 12px;
+    margin-bottom: 24px;
+    flex-wrap: wrap;
+    align-items: center;
+  }
+
+  .search-box {
+    flex: 1;
+    min-width: 240px;
+    position: relative;
+  }
+
+  .search-box input {
+    width: 100%;
+    padding: 10px 14px 10px 38px;
+    border: 1.5px solid var(--border);
+    border-radius: 8px;
+    font-size: 13.5px;
+    font-family: 'DM Sans', sans-serif;
+    background: var(--surface);
+    outline: none;
+    transition: border-color .2s;
+  }
+
+  .search-box input:focus { border-color: var(--accent); }
+
+  .search-icon {
+    position: absolute;
+    left: 12px;
+    top: 50%;
+    transform: translateY(-50%);
+    color: var(--muted);
+    font-size: 15px;
+    pointer-events: none;
+  }
+
+  .filter-select {
+    padding: 10px 14px;
+    border: 1.5px solid var(--border);
+    border-radius: 8px;
+    font-size: 13px;
+    font-family: 'DM Sans', sans-serif;
+    background: var(--surface);
+    color: var(--text);
+    outline: none;
+    cursor: pointer;
+    min-width: 130px;
+  }
+
+  .filter-select:focus { border-color: var(--accent); }
+
+  .cards-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+    gap: 16px;
+  }
+
+  .fund-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 20px;
+    box-shadow: var(--shadow);
+    transition: box-shadow .2s, transform .15s;
+    cursor: pointer;
+  }
+
+  .fund-card:hover {
+    box-shadow: var(--shadow-lg);
+    transform: translateY(-1px);
+  }
+
+  .fund-card-top {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    margin-bottom: 14px;
+  }
+
+  .fund-name {
+    font-size: 13.5px;
+    font-weight: 600;
+    color: var(--text);
+    line-height: 1.4;
+    flex: 1;
+    padding-right: 10px;
+  }
+
+  .fund-amc {
+    font-size: 11.5px;
+    color: var(--muted);
+    margin-top: 3px;
+    font-weight: 400;
+  }
+
+  .signal-pill {
+    display: inline-flex;
+    align-items: center;
+    padding: 3px 10px;
+    border-radius: 20px;
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: .4px;
+    flex-shrink: 0;
+  }
+
+  .signal-buy   { background: var(--green-lt); color: var(--green); }
+  .signal-hold  { background: var(--accent-lt); color: var(--accent); }
+  .signal-watch { background: var(--amber-lt); color: var(--amber); }
+  .signal-exit  { background: var(--red-lt); color: var(--red); }
+
+  .returns-row {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 8px;
+    margin-bottom: 14px;
+  }
+
+  .return-box {
+    background: var(--bg);
+    border-radius: 8px;
+    padding: 10px 12px;
+    text-align: center;
+  }
+
+  .return-label {
+    font-size: 10px;
+    font-weight: 500;
+    text-transform: uppercase;
+    letter-spacing: .4px;
+    color: var(--muted);
+    margin-bottom: 4px;
+  }
+
+  .return-value {
+    font-size: 16px;
+    font-weight: 600;
+    letter-spacing: -.3px;
+  }
+
+  .return-range {
+    font-size: 10px;
+    color: var(--muted);
+    margin-top: 2px;
+  }
+
+  .fund-card-bottom {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding-top: 12px;
+    border-top: 1px solid var(--border);
+  }
+
+  .risk-bar-wrap {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex: 1;
+  }
+
+  .risk-label-sm {
+    font-size: 11px;
+    color: var(--muted);
+    white-space: nowrap;
+  }
+
+  .risk-dots {
+    display: flex;
+    gap: 3px;
+  }
+
+  .risk-dot {
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    background: var(--border);
+  }
+
+  .risk-dot.filled-1 { background: #16A34A; }
+  .risk-dot.filled-2 { background: #65A30D; }
+  .risk-dot.filled-3 { background: #CA8A04; }
+  .risk-dot.filled-4 { background: #EA580C; }
+  .risk-dot.filled-5 { background: #DC2626; }
+
+  .fund-nav {
+    font-size: 12px;
+    color: var(--muted);
+    text-align: right;
+  }
+
+  .fund-nav strong { color: var(--text); font-size: 13px; }
+
+  /* ── Holdings table ── */
+  .section-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 24px;
+    box-shadow: var(--shadow);
+    margin-bottom: 20px;
+  }
+
+  .section-title {
+    font-size: 15px;
+    font-weight: 600;
+    margin-bottom: 18px;
+    color: var(--text);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+
+  .btn-sm {
+    padding: 7px 14px;
+    border-radius: 7px;
+    font-size: 12.5px;
+    font-weight: 500;
+    font-family: 'DM Sans', sans-serif;
+    cursor: pointer;
+    transition: all .15s;
+    border: 1.5px solid var(--border);
+    background: var(--surface);
+    color: var(--text);
+  }
+
+  .btn-sm:hover { border-color: var(--accent); color: var(--accent); }
+  .btn-sm.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
+  .btn-sm.primary:hover { opacity: .9; }
+
+  table { width: 100%; border-collapse: collapse; }
+
+  th {
+    text-align: left;
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: .5px;
+    color: var(--muted);
+    padding: 0 12px 12px;
+    border-bottom: 1px solid var(--border);
+  }
+
+  th:not(:first-child) { text-align: right; }
+
+  td {
+    padding: 13px 12px;
+    border-bottom: 1px solid var(--border);
+    font-size: 13.5px;
+    vertical-align: middle;
+  }
+
+  td:not(:first-child) { text-align: right; }
+
+  tr:last-child td { border-bottom: none; }
+  tr:hover td { background: var(--bg); }
+
+  .fund-name-cell { font-weight: 500; }
+  .fund-cat-cell  { font-size: 11.5px; color: var(--muted); margin-top: 2px; }
+
+  /* ── Journal ── */
+  .journal-timeline { display: flex; flex-direction: column; gap: 12px; }
+
+  .journal-entry {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 18px 20px;
+    box-shadow: var(--shadow);
+    display: flex;
+    gap: 16px;
+    align-items: flex-start;
+  }
+
+  .journal-icon {
+    width: 36px; height: 36px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 15px;
+    flex-shrink: 0;
+  }
+
+  .journal-icon.buy  { background: var(--green-lt); color: var(--green); }
+  .journal-icon.exit { background: var(--red-lt); color: var(--red); }
+
+  .journal-body { flex: 1; }
+  .journal-fund { font-weight: 600; font-size: 14px; }
+  .journal-meta { font-size: 12px; color: var(--muted); margin-top: 3px; }
+  .journal-note { font-size: 12.5px; color: var(--muted); margin-top: 6px; font-style: italic; }
+
+  .journal-amounts {
+    text-align: right;
+    font-size: 13px;
+  }
+
+  .journal-amounts strong { display: block; font-size: 15px; }
+
+  /* ── Add investment modal ── */
+  .modal-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,.35);
+    z-index: 200;
+    display: none;
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+  }
+
+  .modal-overlay.open { display: flex; }
+
+  .modal {
+    background: var(--surface);
+    border-radius: 16px;
+    padding: 32px;
+    width: 100%;
+    max-width: 480px;
+    box-shadow: var(--shadow-lg);
+    max-height: 90vh;
+    overflow-y: auto;
+  }
+
+  .modal-title {
+    font-family: 'DM Serif Display', serif;
+    font-size: 20px;
+    margin-bottom: 24px;
+  }
+
+  .modal-actions {
+    display: flex;
+    gap: 10px;
+    margin-top: 24px;
+    justify-content: flex-end;
+  }
+
+  /* ── Empty states ── */
+  .empty-state {
+    text-align: center;
+    padding: 60px 24px;
+    color: var(--muted);
+  }
+
+  .empty-icon { font-size: 40px; margin-bottom: 12px; }
+  .empty-title { font-size: 16px; font-weight: 600; color: var(--text); margin-bottom: 6px; }
+  .empty-sub { font-size: 13px; }
+
+  /* ── Loading spinner ── */
+  .spinner {
+    width: 20px; height: 20px;
+    border: 2px solid var(--border);
+    border-top-color: var(--accent);
+    border-radius: 50%;
+    animation: spin .7s linear infinite;
+    display: inline-block;
+  }
+
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  .loading-center {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    padding: 60px;
+    gap: 12px;
+    color: var(--muted);
+    font-size: 13px;
+  }
+
+  .toast {
+    position: fixed;
+    bottom: 24px;
+    right: 24px;
+    background: var(--text);
+    color: #fff;
+    padding: 12px 18px;
+    border-radius: 8px;
+    font-size: 13px;
+    font-weight: 500;
+    z-index: 999;
+    opacity: 0;
+    transform: translateY(8px);
+    transition: all .25s;
+    pointer-events: none;
+  }
+
+  .toast.show { opacity: 1; transform: translateY(0); }
+  .toast.success { background: var(--green); }
+  .toast.error { background: var(--red); }
+
+  .tag {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-size: 11px;
+    font-weight: 500;
+    background: var(--bg);
+    color: var(--muted);
+    border: 1px solid var(--border);
+  }
+
+  .pagination {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    justify-content: center;
+    margin-top: 28px;
+  }
+
+  .page-btn {
+    padding: 7px 14px;
+    border: 1px solid var(--border);
+    border-radius: 7px;
+    background: var(--surface);
+    font-size: 13px;
+    cursor: pointer;
+    font-family: 'DM Sans', sans-serif;
+    transition: all .15s;
+  }
+
+  .page-btn:hover { border-color: var(--accent); color: var(--accent); }
+  .page-btn:disabled { opacity: .4; cursor: not-allowed; }
+  .page-info { font-size: 13px; color: var(--muted); }
+
+  /* scrollbar */
+  ::-webkit-scrollbar { width: 5px; height: 5px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: #ddd; border-radius: 10px; }
+</style>
+</head>
+<body>
+
+<!-- ══════════════════════════════════════════════════════════
+     AUTH SCREEN
+══════════════════════════════════════════════════════════ -->
+<div id="auth-screen">
+  <div class="auth-card">
+    <div class="auth-logo">Adhy<span>arvansh</span></div>
+    <div class="auth-tagline">Your personal mutual fund intelligence platform</div>
+
+    <div class="auth-tabs">
+      <button class="auth-tab active" onclick="switchAuthTab('login')">Sign in</button>
+      <button class="auth-tab" onclick="switchAuthTab('register')">Create account</button>
+    </div>
+
+    <div id="auth-error" class="auth-error"></div>
+
+    <!-- Login form -->
+    <div id="login-form">
+      <div class="field">
+        <label>Email address</label>
+        <input type="email" id="login-email" placeholder="you@example.com" autocomplete="email">
+      </div>
+      <div class="field">
+        <label>Password</label>
+        <input type="password" id="login-password" placeholder="••••••••" autocomplete="current-password">
+      </div>
+      <button class="btn-primary" id="login-btn" onclick="doLogin()">Sign in</button>
+    </div>
+
+    <!-- Register form -->
+    <div id="register-form" style="display:none">
+      <div class="field">
+        <label>Full name</label>
+        <input type="text" id="reg-name" placeholder="Your name">
+      </div>
+      <div class="field">
+        <label>Email address</label>
+        <input type="email" id="reg-email" placeholder="you@example.com">
+      </div>
+      <div class="field">
+        <label>Password</label>
+        <input type="password" id="reg-password" placeholder="Min 8 characters">
+      </div>
+      <button class="btn-primary" id="register-btn" onclick="doRegister()">Create account</button>
+    </div>
+  </div>
+</div>
+
+<!-- ══════════════════════════════════════════════════════════
+     MAIN APP
+══════════════════════════════════════════════════════════ -->
+<div id="app">
+  <!-- Sidebar -->
+  <nav class="sidebar">
+    <div class="sidebar-logo">Adhy<span>arvansh</span></div>
+
+    <button class="nav-item active" onclick="showPage('dashboard')" id="nav-dashboard">
+      <span class="nav-icon">◈</span> Dashboard
+    </button>
+    <button class="nav-item" onclick="showPage('funds')" id="nav-funds">
+      <span class="nav-icon">⊞</span> Fund Explorer
+    </button>
+    <button class="nav-item" onclick="showPage('portfolio')" id="nav-portfolio">
+      <span class="nav-icon">◉</span> My Portfolio
+    </button>
+    <button class="nav-item" onclick="showPage('journal')" id="nav-journal">
+      <span class="nav-icon">≡</span> Journal
+    </button>
+
+    <div class="sidebar-bottom">
+      <div class="user-chip">
+        <div class="user-avatar" id="user-avatar">R</div>
+        <div>
+          <div class="user-name" id="user-name-display">Loading…</div>
+          <div class="user-email" id="user-email-display"></div>
+        </div>
+      </div>
+      <button class="btn-logout" onclick="doLogout()">Sign out</button>
+    </div>
+  </nav>
+
+  <!-- Main -->
+  <main class="main">
+
+    <!-- ── Dashboard ── -->
+    <div class="page active" id="page-dashboard">
+      <div class="page-header">
+        <div>
+          <div class="page-title">Dashboard</div>
+          <div class="page-subtitle" id="dashboard-date"></div>
+        </div>
+        <button class="btn-sm primary" onclick="openAddModal()">+ Add Investment</button>
+      </div>
+
+      <div class="summary-grid" id="summary-grid">
+        <div class="summary-card">
+          <div class="summary-label">Total Invested</div>
+          <div class="summary-value" id="sum-invested">—</div>
+        </div>
+        <div class="summary-card">
+          <div class="summary-label">Current Value</div>
+          <div class="summary-value" id="sum-current">—</div>
+        </div>
+        <div class="summary-card">
+          <div class="summary-label">Total Gain / Loss</div>
+          <div class="summary-value" id="sum-gain">—</div>
+          <div class="summary-sub" id="sum-gain-pct"></div>
+        </div>
+        <div class="summary-card">
+          <div class="summary-label">Funds Held</div>
+          <div class="summary-value" id="sum-funds">—</div>
+        </div>
+      </div>
+
+      <div class="section-card">
+        <div class="section-title">
+          Holdings with AI signals
+          <button class="btn-sm primary" onclick="openAddModal()">+ Add</button>
+        </div>
+        <div id="holdings-table-wrap">
+          <div class="loading-center"><div class="spinner"></div> Loading holdings…</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── Fund Explorer ── -->
+    <div class="page" id="page-funds">
+      <div class="page-header">
+        <div>
+          <div class="page-title">Fund Explorer</div>
+          <div class="page-subtitle">Browse, filter and analyse all Indian mutual funds</div>
+        </div>
+      </div>
+
+      <div class="funds-controls">
+        <div class="search-box">
+          <span class="search-icon">⌕</span>
+          <input type="text" id="fund-search" placeholder="Search by fund name or AMC…" oninput="debounceSearch()">
+        </div>
+        <select class="filter-select" id="filter-category" onchange="loadFunds(1)">
+          <option value="">All categories</option>
+          <option value="Equity">Equity</option>
+          <option value="Debt">Debt</option>
+          <option value="Hybrid">Hybrid</option>
+          <option value="Other">Other</option>
+        </select>
+        <select class="filter-select" id="filter-signal" onchange="loadFunds(1)">
+          <option value="">All signals</option>
+          <option value="buy">Buy</option>
+          <option value="hold">Hold</option>
+          <option value="watch">Watch</option>
+          <option value="exit">Exit</option>
+        </select>
+      </div>
+
+      <div id="funds-grid" class="cards-grid">
+        <div class="loading-center" style="grid-column:1/-1">
+          <div class="spinner"></div> Loading funds…
+        </div>
+      </div>
+
+      <div class="pagination" id="funds-pagination" style="display:none">
+        <button class="page-btn" id="prev-page" onclick="loadFunds(currentPage-1)">← Prev</button>
+        <span class="page-info" id="page-info"></span>
+        <button class="page-btn" id="next-page" onclick="loadFunds(currentPage+1)">Next →</button>
+      </div>
+    </div>
+
+    <!-- ── Portfolio ── -->
+    <div class="page" id="page-portfolio">
+      <div class="page-header">
+        <div>
+          <div class="page-title">My Portfolio</div>
+          <div class="page-subtitle">All active holdings with returns and AI signals</div>
+        </div>
+        <button class="btn-sm primary" onclick="openAddModal()">+ Add Investment</button>
+      </div>
+
+      <div id="portfolio-content">
+        <div class="loading-center"><div class="spinner"></div> Loading portfolio…</div>
+      </div>
+    </div>
+
+    <!-- ── Journal ── -->
+    <div class="page" id="page-journal">
+      <div class="page-header">
+        <div>
+          <div class="page-title">Journal</div>
+          <div class="page-subtitle">Investment and exit log with notes</div>
+        </div>
+      </div>
+      <div id="journal-content">
+        <div class="loading-center"><div class="spinner"></div> Loading journal…</div>
+      </div>
+    </div>
+
+  </main>
+</div>
+
+<!-- ══════════════════════════════════════════════════════════
+     ADD INVESTMENT MODAL
+══════════════════════════════════════════════════════════ -->
+<div class="modal-overlay" id="add-modal">
+  <div class="modal">
+    <div class="modal-title">Add Investment</div>
+
+    <div class="field">
+      <label>Search fund</label>
+      <input type="text" id="modal-fund-search" placeholder="Type fund name or scheme code…" oninput="searchFundForModal()">
+      <div id="modal-fund-results" style="margin-top:8px;display:none;border:1px solid var(--border);border-radius:8px;overflow:hidden;max-height:180px;overflow-y:auto;"></div>
+    </div>
+
+    <div id="selected-fund-info" style="display:none;background:var(--accent-lt);border-radius:8px;padding:12px;margin-bottom:4px;font-size:13px;color:var(--accent);font-weight:500"></div>
+
+    <input type="hidden" id="modal-scheme-code">
+    <input type="hidden" id="modal-fund-name">
+    <input type="hidden" id="modal-category">
+    <input type="hidden" id="modal-amc">
+
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px">
+      <div class="field">
+        <label>Units purchased</label>
+        <input type="number" id="modal-units" placeholder="e.g. 100.5" step="0.0001">
+      </div>
+      <div class="field">
+        <label>Purchase NAV (₹)</label>
+        <input type="number" id="modal-nav" placeholder="e.g. 45.23" step="0.0001">
+      </div>
+    </div>
+
+    <div class="field">
+      <label>Purchase date</label>
+      <input type="date" id="modal-date">
+    </div>
+
+    <div class="field">
+      <label>Notes (optional)</label>
+      <input type="text" id="modal-notes" placeholder="Why did you invest? Market context…">
+    </div>
+
+    <div id="modal-invested" style="font-size:13px;color:var(--muted);margin-top:-8px"></div>
+
+    <div class="modal-actions">
+      <button class="btn-sm" onclick="closeAddModal()">Cancel</button>
+      <button class="btn-sm primary" onclick="submitInvestment()">Save Investment</button>
+    </div>
+  </div>
+</div>
+
+<!-- Exit modal -->
+<div class="modal-overlay" id="exit-modal">
+  <div class="modal">
+    <div class="modal-title">Record Exit</div>
+    <input type="hidden" id="exit-entry-id">
+
+    <div id="exit-fund-info" style="background:var(--bg);border-radius:8px;padding:12px;margin-bottom:16px;font-size:13px;"></div>
+
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px">
+      <div class="field">
+        <label>Units sold</label>
+        <input type="number" id="exit-units" placeholder="Units to sell" step="0.0001">
+      </div>
+      <div class="field">
+        <label>Exit NAV (₹)</label>
+        <input type="number" id="exit-nav" placeholder="e.g. 56.78" step="0.0001">
+      </div>
+    </div>
+
+    <div class="field">
+      <label>Exit date</label>
+      <input type="date" id="exit-date">
+    </div>
+
+    <div class="field">
+      <label>Notes (optional)</label>
+      <input type="text" id="exit-notes" placeholder="Reason for exit…">
+    </div>
+
+    <div class="modal-actions">
+      <button class="btn-sm" onclick="closeExitModal()">Cancel</button>
+      <button class="btn-sm primary" onclick="submitExit()">Record Exit</button>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+// ═══════════════════════════════════════════════════════════
+// CONFIG — update this to your Worker URL
+// ═══════════════════════════════════════════════════════════
+const API = 'https://adhyarvansh.pss-rajaram.workers.dev'
+
+// ── State ──────────────────────────────────────────────────
+let token         = localStorage.getItem('adhy_token')
+let currentUser   = JSON.parse(localStorage.getItem('adhy_user') || 'null')
+let currentPage   = 1
+let searchTimeout = null
+let holdings      = []
+
+// ── Boot ───────────────────────────────────────────────────
+window.onload = () => {
+  document.getElementById('dashboard-date').textContent =
+    new Date().toLocaleDateString('en-IN', { weekday:'long', day:'numeric', month:'long', year:'numeric' })
+
+  // Set today's date as default in modals
+  const today = new Date().toISOString().split('T')[0]
+  document.getElementById('modal-date').value = today
+  document.getElementById('exit-date').value  = today
+
+  if (token && currentUser) {
+    showApp()
+  }
+}
+
+// ── Helpers ────────────────────────────────────────────────
+async function apiFetch(path, opts = {}) {
+  const res = await fetch(API + path, {
+    ...opts,
+    headers: {
+      'Content-Type': 'application/json',
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      ...(opts.headers || {})
+    }
+  })
+  const data = await res.json()
+  if (!res.ok) throw new Error(data.error || 'Request failed')
+  return data
+}
+
+function fmt(n) {
+  if (n == null) return '—'
+  n = parseFloat(n)
+  if (isNaN(n)) return '—'
+  if (Math.abs(n) >= 1e7) return '₹' + (n/1e7).toFixed(2) + 'Cr'
+  if (Math.abs(n) >= 1e5) return '₹' + (n/1e5).toFixed(2) + 'L'
+  return '₹' + n.toLocaleString('en-IN', {minimumFractionDigits:2, maximumFractionDigits:2})
+}
+
+function pct(n) {
+  if (n == null) return '—'
+  const v = parseFloat(n)
+  if (isNaN(v)) return '—'
+  return (v >= 0 ? '+' : '') + v.toFixed(2) + '%'
+}
+
+function showToast(msg, type = '') {
+  const t = document.getElementById('toast')
+  t.textContent = msg
+  t.className = 'toast show ' + type
+  setTimeout(() => t.className = 'toast', 2800)
+}
+
+function signalPill(signal) {
+  const s = (signal || 'watch').toLowerCase()
+  return `<span class="signal-pill signal-${s}">${s}</span>`
+}
+
+function riskDots(score) {
+  score = parseInt(score) || 3
+  const colors = ['','#16A34A','#65A30D','#CA8A04','#EA580C','#DC2626']
+  let html = '<div class="risk-dots">'
+  for (let i=1; i<=5; i++) {
+    html += `<div class="risk-dot" style="${i<=score ? 'background:'+colors[score] : ''}"></div>`
+  }
+  return html + '</div>'
+}
+
+function returnColor(v) {
+  if (v == null) return 'var(--muted)'
+  return parseFloat(v) >= 0 ? 'var(--green)' : 'var(--red)'
+}
+
+// ── Auth ───────────────────────────────────────────────────
+function switchAuthTab(tab) {
+  document.getElementById('login-form').style.display    = tab==='login' ? '' : 'none'
+  document.getElementById('register-form').style.display = tab==='register' ? '' : 'none'
+  document.querySelectorAll('.auth-tab').forEach((t,i) =>
+    t.classList.toggle('active', (i===0 && tab==='login') || (i===1 && tab==='register'))
+  )
+  document.getElementById('auth-error').style.display = 'none'
+}
+
+async function doLogin() {
+  const email    = document.getElementById('login-email').value.trim()
+  const password = document.getElementById('login-password').value
+  const btn      = document.getElementById('login-btn')
+  if (!email || !password) return showAuthError('Please fill in all fields')
+
+  btn.disabled = true
+  btn.textContent = 'Signing in…'
+  try {
+    const data = await apiFetch('/auth/login', {
+      method: 'POST',
+      body: JSON.stringify({ email, password })
+    })
+    saveAuth(data)
+    showApp()
+  } catch(e) {
+    showAuthError(e.message)
+  } finally {
+    btn.disabled = false
+    btn.textContent = 'Sign in'
+  }
+}
+
+async function doRegister() {
+  const name     = document.getElementById('reg-name').value.trim()
+  const email    = document.getElementById('reg-email').value.trim()
+  const password = document.getElementById('reg-password').value
+  const btn      = document.getElementById('register-btn')
+  if (!name || !email || !password) return showAuthError('Please fill in all fields')
+
+  btn.disabled = true
+  btn.textContent = 'Creating account…'
+  try {
+    const data = await apiFetch('/auth/register', {
+      method: 'POST',
+      body: JSON.stringify({ name, email, password })
+    })
+    saveAuth(data)
+    showApp()
+  } catch(e) {
+    showAuthError(e.message)
+  } finally {
+    btn.disabled = false
+    btn.textContent = 'Create account'
+  }
+}
+
+function saveAuth(data) {
+  token = data.token
+  currentUser = { id: data.user_id, name: data.name, email: data.email }
+  localStorage.setItem('adhy_token', token)
+  localStorage.setItem('adhy_user', JSON.stringify(currentUser))
+}
+
+function showAuthError(msg) {
+  const el = document.getElementById('auth-error')
+  el.textContent = msg
+  el.style.display = 'block'
+}
+
+function doLogout() {
+  localStorage.removeItem('adhy_token')
+  localStorage.removeItem('adhy_user')
+  token = null
+  currentUser = null
+  document.getElementById('app').style.display = 'none'
+  document.getElementById('auth-screen').style.display = 'flex'
+}
+
+function showApp() {
+  document.getElementById('auth-screen').style.display = 'none'
+  document.getElementById('app').style.display = 'block'
+
+  if (currentUser) {
+    document.getElementById('user-name-display').textContent  = currentUser.name
+    document.getElementById('user-email-display').textContent = currentUser.email
+    document.getElementById('user-avatar').textContent = currentUser.name[0].toUpperCase()
+  }
+
+  showPage('dashboard')
+}
+
+// ── Navigation ─────────────────────────────────────────────
+function showPage(name) {
+  document.querySelectorAll('.page').forEach(p => p.classList.remove('active'))
+  document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'))
+  document.getElementById('page-'+name).classList.add('active')
+  document.getElementById('nav-'+name).classList.add('active')
+
+  if (name === 'dashboard') loadDashboard()
+  if (name === 'funds')     loadFunds(1)
+  if (name === 'portfolio') loadPortfolio()
+  if (name === 'journal')   loadJournal()
+}
+
+// ── Dashboard ──────────────────────────────────────────────
+async function loadDashboard() {
+  try {
+    const [summary, holdingsData] = await Promise.all([
+      apiFetch('/portfolio/summary'),
+      apiFetch('/portfolio')
+    ])
+    holdings = holdingsData
+
+    const invested = parseFloat(summary.total_invested || 0)
+    const current  = parseFloat(summary.current_value  || 0)
+    const gain     = parseFloat(summary.total_gain     || 0)
+    const gainPct  = invested ? (gain / invested * 100) : 0
+
+    document.getElementById('sum-invested').textContent = fmt(invested)
+    document.getElementById('sum-current').textContent  = fmt(current)
+    document.getElementById('sum-funds').textContent    = summary.total_funds || '0'
+
+    const gainEl = document.getElementById('sum-gain')
+    gainEl.textContent  = fmt(gain)
+    gainEl.className    = 'summary-value ' + (gain >= 0 ? 'gain' : 'loss')
+    document.getElementById('sum-gain-pct').textContent = pct(gainPct)
+
+    renderHoldingsTable(holdings)
+  } catch(e) {
+    document.getElementById('holdings-table-wrap').innerHTML =
+      `<div class="empty-state"><div class="empty-icon">⚠</div><div class="empty-title">Could not load data</div><div class="empty-sub">${e.message}</div></div>`
+  }
+}
+
+function renderHoldingsTable(data) {
+  const wrap = document.getElementById('holdings-table-wrap')
+
+  if (!data.length) {
+    wrap.innerHTML = `<div class="empty-state">
+      <div class="empty-icon">📊</div>
+      <div class="empty-title">No holdings yet</div>
+      <div class="empty-sub">Add your first mutual fund investment to get started</div>
+    </div>`
+    return
+  }
+
+  const rows = data.map(h => {
+    const gain  = parseFloat(h.gain_loss || 0)
+    const retPct = h.purchase_nav ? ((parseFloat(h.latest_nav||h.purchase_nav) - parseFloat(h.purchase_nav)) / parseFloat(h.purchase_nav) * 100) : 0
+    return `<tr>
+      <td>
+        <div class="fund-name-cell">${h.fund_name.substring(0,45)}${h.fund_name.length>45?'…':''}</div>
+        <div class="fund-cat-cell">${h.category||''} · ${h.amc_name||''}</div>
+      </td>
+      <td>${fmt(h.invested_amount)}</td>
+      <td>${fmt(h.current_value)}</td>
+      <td style="color:${gain>=0?'var(--green)':'var(--red)'};font-weight:500">${fmt(gain)} <span style="font-size:11px">(${pct(retPct)})</span></td>
+      <td>${signalPill(h.signal)}</td>
+      <td>
+        <button class="btn-sm" onclick="openExitModal(${h.id},'${h.fund_name.replace(/'/g,"\\'")}',${h.units})">Exit</button>
+      </td>
+    </tr>`
+  }).join('')
+
+  wrap.innerHTML = `<table>
+    <thead><tr>
+      <th>Fund</th><th>Invested</th><th>Current</th><th>P&L</th><th>Signal</th><th></th>
+    </tr></thead>
+    <tbody>${rows}</tbody>
+  </table>`
+}
+
+// ── Fund Explorer ──────────────────────────────────────────
+async function loadFunds(page = 1) {
+  currentPage = page
+  const grid  = document.getElementById('funds-grid')
+  const q     = document.getElementById('fund-search').value.trim()
+  const cat   = document.getElementById('filter-category').value
+  const sig   = document.getElementById('filter-signal').value
+
+  grid.innerHTML = `<div class="loading-center" style="grid-column:1/-1"><div class="spinner"></div> Loading funds…</div>`
+
+  try {
+    let data
+    if (q.length >= 2) {
+      const res = await apiFetch(`/funds/search?q=${encodeURIComponent(q)}`)
+      data = { funds: res.funds, page: 1, limit: 50 }
+    } else {
+      const params = new URLSearchParams({ page })
+      if (cat) params.set('category', cat)
+      if (sig) params.set('signal', sig)
+      data = await apiFetch(`/funds?${params}`)
+    }
+
+    const funds = data.funds || []
+
+    if (!funds.length) {
+      grid.innerHTML = `<div class="empty-state" style="grid-column:1/-1">
+        <div class="empty-icon">🔍</div>
+        <div class="empty-title">No funds found</div>
+        <div class="empty-sub">Try adjusting your search or filters</div>
+      </div>`
+      document.getElementById('funds-pagination').style.display = 'none'
+      return
+    }
+
+    grid.innerHTML = funds.map(f => fundCard(f)).join('')
+
+    // Pagination
+    const pg = document.getElementById('funds-pagination')
+    if (!q) {
+      pg.style.display = 'flex'
+      document.getElementById('page-info').textContent = `Page ${page}`
+      document.getElementById('prev-page').disabled = page <= 1
+      document.getElementById('next-page').disabled = funds.length < 50
+    } else {
+      pg.style.display = 'none'
+    }
+  } catch(e) {
+    grid.innerHTML = `<div class="empty-state" style="grid-column:1/-1">
+      <div class="empty-icon">⚠</div>
+      <div class="empty-title">Could not load funds</div>
+      <div class="empty-sub">${e.message}</div>
+    </div>`
+  }
+}
+
+function fundCard(f) {
+  const r1 = f.return_1y != null ? parseFloat(f.return_1y) : null
+  const r3 = f.return_3y != null ? parseFloat(f.return_3y) : null
+  const r5 = f.return_5y != null ? parseFloat(f.return_5y) : null
+
+  const retBox = (label, val, rangeMin, rangeMax) => {
+    const hasVal = val != null
+    const color  = hasVal ? returnColor(val) : 'var(--muted)'
+    const range  = (rangeMin != null && rangeMax != null)
+      ? `<div class="return-range">${pct(rangeMin)} – ${pct(rangeMax)}</div>` : ''
+    return `<div class="return-box">
+      <div class="return-label">${label}</div>
+      <div class="return-value" style="color:${color}">${hasVal ? pct(val) : '—'}</div>
+      ${range}
+    </div>`
+  }
+
+  return `<div class="fund-card" onclick="addFundToPortfolio('${f.scheme_code}','${f.fund_name.replace(/'/g,"\\'")}','${f.category||''}','${f.amc_name||''}')">
+    <div class="fund-card-top">
+      <div>
+        <div class="fund-name">${f.fund_name.substring(0,55)}${f.fund_name.length>55?'…':''}</div>
+        <div class="fund-amc">${f.amc_name||''} · <span class="tag">${f.category||'Other'}</span></div>
+      </div>
+      ${f.signal ? signalPill(f.signal) : ''}
+    </div>
+
+    <div class="returns-row">
+      ${retBox('1 Year', r1, f.expected_1y_min, f.expected_1y_max)}
+      ${retBox('3 Years', r3, f.expected_3y_min, f.expected_3y_max)}
+      ${retBox('5 Years', r5, f.expected_5y_min, f.expected_5y_max)}
+    </div>
+
+    <div class="fund-card-bottom">
+      <div class="risk-bar-wrap">
+        <span class="risk-label-sm">Risk</span>
+        ${riskDots(f.risk_score)}
+        <span class="risk-label-sm" style="color:var(--text)">${f.risk_label||'—'}</span>
+      </div>
+      <div class="fund-nav">
+        <strong>₹${parseFloat(f.latest_nav||0).toFixed(2)}</strong>
+        <div>NAV</div>
+      </div>
+    </div>
+
+    ${f.rationale ? `<div style="margin-top:12px;padding-top:12px;border-top:1px solid var(--border);font-size:11.5px;color:var(--muted);line-height:1.5">${f.rationale.substring(0,100)}…</div>` : ''}
+  </div>`
+}
+
+function debounceSearch() {
+  clearTimeout(searchTimeout)
+  searchTimeout = setTimeout(() => loadFunds(1), 400)
+}
+
+// ── Portfolio page ─────────────────────────────────────────
+async function loadPortfolio() {
+  const el = document.getElementById('portfolio-content')
+  el.innerHTML = `<div class="loading-center"><div class="spinner"></div> Loading…</div>`
+
+  try {
+    const data = await apiFetch('/portfolio')
+    holdings = data
+
+    if (!data.length) {
+      el.innerHTML = `<div class="empty-state">
+        <div class="empty-icon">📂</div>
+        <div class="empty-title">Portfolio is empty</div>
+        <div class="empty-sub">Add your first investment to start tracking</div>
+      </div>`
+      return
+    }
+
+    const rows = data.map(h => {
+      const gain   = parseFloat(h.gain_loss || 0)
+      const retPct = h.purchase_nav ? ((parseFloat(h.latest_nav||h.purchase_nav) - parseFloat(h.purchase_nav)) / parseFloat(h.purchase_nav) * 100) : 0
+      const days   = h.purchase_date ? Math.floor((Date.now() - new Date(h.purchase_date)) / 86400000) : 0
+      return `<tr>
+        <td>
+          <div class="fund-name-cell">${h.fund_name.substring(0,50)}${h.fund_name.length>50?'…':''}</div>
+          <div class="fund-cat-cell">${h.category||''} · Since ${h.purchase_date||''} (${days}d)</div>
+        </td>
+        <td>${h.units} units<br><span style="font-size:11px;color:var(--muted)">@₹${parseFloat(h.purchase_nav||0).toFixed(2)}</span></td>
+        <td>${fmt(h.invested_amount)}</td>
+        <td>${fmt(h.current_value)}</td>
+        <td style="color:${gain>=0?'var(--green)':'var(--red)'};font-weight:500">${fmt(gain)}<br><span style="font-size:11px">${pct(retPct)}</span></td>
+        <td>${signalPill(h.signal)}</td>
+        <td><button class="btn-sm" onclick="openExitModal(${h.id},'${h.fund_name.replace(/'/g,"\\'")}',${h.units})">Exit</button></td>
+      </tr>`
+    }).join('')
+
+    el.innerHTML = `<div class="section-card">
+      <table>
+        <thead><tr>
+          <th>Fund</th><th>Units</th><th>Invested</th><th>Current</th><th>P&L</th><th>Signal</th><th></th>
+        </tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </div>`
+  } catch(e) {
+    el.innerHTML = `<div class="empty-state"><div class="empty-icon">⚠</div><div class="empty-title">${e.message}</div></div>`
+  }
+}
+
+// ── Journal ────────────────────────────────────────────────
+async function loadJournal() {
+  const el = document.getElementById('journal-content')
+  el.innerHTML = `<div class="loading-center"><div class="spinner"></div> Loading…</div>`
+
+  try {
+    const [holds, exits] = await Promise.all([
+      apiFetch('/portfolio'),
+      apiFetch('/portfolio') // we show holdings as journal too
+    ])
+
+    const all = holds.map(h => ({
+      type: 'buy',
+      fund: h.fund_name,
+      date: h.purchase_date,
+      amount: h.invested_amount,
+      nav: h.purchase_nav,
+      units: h.units,
+      notes: h.notes
+    })).sort((a,b) => new Date(b.date) - new Date(a.date))
+
+    if (!all.length) {
+      el.innerHTML = `<div class="empty-state">
+        <div class="empty-icon">📓</div>
+        <div class="empty-title">Journal is empty</div>
+        <div class="empty-sub">Your investment and exit history will appear here</div>
+      </div>`
+      return
+    }
+
+    el.innerHTML = `<div class="journal-timeline">${all.map(e => `
+      <div class="journal-entry">
+        <div class="journal-icon ${e.type}">${e.type==='buy' ? '↑' : '↓'}</div>
+        <div class="journal-body">
+          <div class="journal-fund">${e.fund.substring(0,60)}</div>
+          <div class="journal-meta">${e.type==='buy'?'Invested':'Exited'} on ${e.date} · ${e.units} units @ ₹${parseFloat(e.nav||0).toFixed(2)}</div>
+          ${e.notes ? `<div class="journal-note">"${e.notes}"</div>` : ''}
+        </div>
+        <div class="journal-amounts">
+          <strong style="color:${e.type==='buy'?'var(--accent)':'var(--green)'}">${fmt(e.amount)}</strong>
+          <span style="font-size:11px;color:var(--muted)">${e.type==='buy'?'Invested':'Realised'}</span>
+        </div>
+      </div>`).join('')}</div>`
+  } catch(e) {
+    el.innerHTML = `<div class="empty-state"><div class="empty-icon">⚠</div><div class="empty-title">${e.message}</div></div>`
+  }
+}
+
+// ── Add investment modal ───────────────────────────────────
+function openAddModal() {
+  document.getElementById('add-modal').classList.add('open')
+}
+
+function closeAddModal() {
+  document.getElementById('add-modal').classList.remove('open')
+  document.getElementById('modal-fund-search').value = ''
+  document.getElementById('modal-fund-results').style.display = 'none'
+  document.getElementById('selected-fund-info').style.display = 'none'
+  document.getElementById('modal-scheme-code').value = ''
+  document.getElementById('modal-units').value = ''
+  document.getElementById('modal-nav').value = ''
+  document.getElementById('modal-notes').value = ''
+  document.getElementById('modal-invested').textContent = ''
+}
+
+function addFundToPortfolio(code, name, category, amc) {
+  document.getElementById('modal-scheme-code').value = code
+  document.getElementById('modal-fund-name').value   = name
+  document.getElementById('modal-category').value    = category
+  document.getElementById('modal-amc').value         = amc
+  document.getElementById('modal-fund-search').value = name
+  document.getElementById('selected-fund-info').style.display = 'block'
+  document.getElementById('selected-fund-info').textContent   = '✓ ' + name
+  document.getElementById('modal-fund-results').style.display = 'none'
+  openAddModal()
+}
+
+let modalSearchTimeout = null
+async function searchFundForModal() {
+  clearTimeout(modalSearchTimeout)
+  const q = document.getElementById('modal-fund-search').value.trim()
+  if (q.length < 2) {
+    document.getElementById('modal-fund-results').style.display = 'none'
+    return
+  }
+  modalSearchTimeout = setTimeout(async () => {
+    try {
+      const data = await apiFetch(`/funds/search?q=${encodeURIComponent(q)}`)
+      const res  = document.getElementById('modal-fund-results')
+      if (!data.funds.length) { res.style.display='none'; return }
+      res.style.display = 'block'
+      res.innerHTML = data.funds.slice(0,8).map(f =>
+        `<div onclick="selectModalFund('${f.scheme_code}','${f.fund_name.replace(/'/g,"\\'")}','${f.category||''}','${f.amc_name||''}')"
+          style="padding:10px 14px;cursor:pointer;font-size:13px;border-bottom:1px solid var(--border);background:var(--surface)"
+          onmouseover="this.style.background='var(--bg)'" onmouseout="this.style.background='var(--surface)'">
+          <div style="font-weight:500">${f.fund_name.substring(0,50)}</div>
+          <div style="font-size:11px;color:var(--muted)">${f.amc_name||''} · ${f.category||''}</div>
+        </div>`
+      ).join('')
+    } catch {}
+  }, 350)
+}
+
+function selectModalFund(code, name, category, amc) {
+  document.getElementById('modal-scheme-code').value = code
+  document.getElementById('modal-fund-name').value   = name
+  document.getElementById('modal-category').value    = category
+  document.getElementById('modal-amc').value         = amc
+  document.getElementById('modal-fund-search').value = name
+  document.getElementById('selected-fund-info').style.display = 'block'
+  document.getElementById('selected-fund-info').textContent   = '✓ ' + name
+  document.getElementById('modal-fund-results').style.display = 'none'
+}
+
+document.addEventListener('input', e => {
+  if (e.target.id === 'modal-units' || e.target.id === 'modal-nav') {
+    const u = parseFloat(document.getElementById('modal-units').value) || 0
+    const n = parseFloat(document.getElementById('modal-nav').value) || 0
+    document.getElementById('modal-invested').textContent =
+      u && n ? `Investment amount: ${fmt(u * n)}` : ''
+  }
+})
+
+async function submitInvestment() {
+  const code  = document.getElementById('modal-scheme-code').value
+  const name  = document.getElementById('modal-fund-name').value
+  const units = document.getElementById('modal-units').value
+  const nav   = document.getElementById('modal-nav').value
+  const date  = document.getElementById('modal-date').value
+  const notes = document.getElementById('modal-notes').value
+
+  if (!code)  return showToast('Please select a fund', 'error')
+  if (!units) return showToast('Enter units purchased', 'error')
+  if (!nav)   return showToast('Enter purchase NAV', 'error')
+  if (!date)  return showToast('Enter purchase date', 'error')
+
+  try {
+    await apiFetch('/portfolio', {
+      method: 'POST',
+      body: JSON.stringify({
+        scheme_code:   code,
+        fund_name:     name,
+        category:      document.getElementById('modal-category').value,
+        amc_name:      document.getElementById('modal-amc').value,
+        units:         parseFloat(units),
+        purchase_nav:  parseFloat(nav),
+        purchase_date: date,
+        notes
+      })
+    })
+    showToast('Investment saved!', 'success')
+    closeAddModal()
+    loadDashboard()
+  } catch(e) {
+    showToast(e.message, 'error')
+  }
+}
+
+// ── Exit modal ─────────────────────────────────────────────
+function openExitModal(id, name, units) {
+  document.getElementById('exit-entry-id').value = id
+  document.getElementById('exit-fund-info').textContent = name + ' · ' + units + ' units available'
+  document.getElementById('exit-modal').classList.add('open')
+}
+
+function closeExitModal() {
+  document.getElementById('exit-modal').classList.remove('open')
+}
+
+async function submitExit() {
+  const id    = document.getElementById('exit-entry-id').value
+  const units = document.getElementById('exit-units').value
+  const nav   = document.getElementById('exit-nav').value
+  const date  = document.getElementById('exit-date').value
+  const notes = document.getElementById('exit-notes').value
+
+  if (!units) return showToast('Enter units sold', 'error')
+  if (!nav)   return showToast('Enter exit NAV', 'error')
+  if (!date)  return showToast('Enter exit date', 'error')
+
+  try {
+    const res = await apiFetch(`/portfolio/${id}/exit`, {
+      method: 'POST',
+      body: JSON.stringify({ units_sold: +units, exit_nav: +nav, exit_date: date, notes })
+    })
+    showToast(`Exit recorded · ${res.tax_type} · Gain: ${fmt(res.realised_gain)}`, 'success')
+    closeExitModal()
+    loadDashboard()
+  } catch(e) {
+    showToast(e.message, 'error')
+  }
+}
+
+// Close modals on overlay click
+document.getElementById('add-modal').addEventListener('click', e => {
+  if (e.target === e.currentTarget) closeAddModal()
+})
+document.getElementById('exit-modal').addEventListener('click', e => {
+  if (e.target === e.currentTarget) closeExitModal()
+})
+
+// Enter key on login
+document.addEventListener('keydown', e => {
+  if (e.key === 'Enter') {
+    if (document.getElementById('login-form').style.display !== 'none') doLogin()
+    else if (document.getElementById('register-form').style.display !== 'none') doRegister()
+  }
+})
+</script>
+</body>
+</html>
