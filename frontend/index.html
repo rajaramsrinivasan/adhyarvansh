@@ -1073,16 +1073,23 @@ window.onload = () => {
 
 // ── Helpers ────────────────────────────────────────────────
 async function apiFetch(path, opts = {}) {
-  const res = await fetch(API + path, {
-    ...opts,
-    headers: {
-      'Content-Type': 'application/json',
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      ...(opts.headers || {})
-    }
-  })
-  const data = await res.json()
-  if (!res.ok) throw new Error(data.error || 'Request failed')
+  let res
+  try {
+    res = await fetch(API + path, {
+      ...opts,
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        ...(opts.headers || {})
+      }
+    })
+  } catch(networkErr) {
+    // Network-level failure — show actual error
+    throw new Error('Network error: ' + networkErr.message + ' (check Worker is deployed)')
+  }
+  let data
+  try { data = await res.json() } catch { data = { error: `Server error ${res.status}` } }
+  if (!res.ok) throw new Error(data.error || `Error ${res.status}`)
   return data
 }
 
