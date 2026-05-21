@@ -2,21 +2,18 @@ name: Daily MF Sync + AI Analysis + Email Digest
 
 on:
   schedule:
-    # 2:30 AM UTC = 8:00 AM IST every day
-    - cron: '30 2 * * *'
-  workflow_dispatch:   # allows manual trigger from GitHub Actions tab
+    - cron: '30 2 * * *'   # 8:00 AM IST daily
+  workflow_dispatch:
 
 jobs:
   daily-run:
     runs-on: ubuntu-latest
-    timeout-minutes: 120   # full sync can take ~60-90 mins for all 45k funds
+    timeout-minutes: 45    # was 120 — async sync finishes in ~15 mins
 
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Set up Python 3.12
-        uses: actions/setup-python@v5
+      - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
           cache: 'pip'
@@ -25,30 +22,27 @@ jobs:
       - name: Install dependencies
         run: pip install -r github-actions/requirements.txt
 
-      - name: Step 1 — Sync MF data from mfapi.in
+      - name: Step 1 — Sync MF data (async, ~15 min)
         env:
-          DATABASE_URL: ${{ secrets.DATABASE_URL }}
-        run: |
-          echo "Starting MF data sync..."
-          python github-actions/scripts/sync_mf_data.py
-          echo "MF sync complete ✅"
+          CF_ACCOUNT_ID:  ${{ secrets.CF_ACCOUNT_ID }}
+          CF_API_TOKEN:   ${{ secrets.CF_API_TOKEN }}
+          D1_DATABASE_ID: ${{ secrets.D1_DATABASE_ID }}
+        run: python github-actions/scripts/sync_mf_data.py
 
-      - name: Step 2 — Run AI analysis (Claude)
+      - name: Step 2 — AI analysis (Claude)
         env:
-          DATABASE_URL:      ${{ secrets.DATABASE_URL }}
+          CF_ACCOUNT_ID:     ${{ secrets.CF_ACCOUNT_ID }}
+          CF_API_TOKEN:      ${{ secrets.CF_API_TOKEN }}
+          D1_DATABASE_ID:    ${{ secrets.D1_DATABASE_ID }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-        run: |
-          echo "Starting AI analysis..."
-          python github-actions/scripts/ai_analysis.py
-          echo "AI analysis complete ✅"
+        run: python github-actions/scripts/ai_analysis.py
 
-      - name: Step 3 — Send daily email digest
+      - name: Step 3 — Daily email digest
         env:
-          DATABASE_URL:       ${{ secrets.DATABASE_URL }}
+          CF_ACCOUNT_ID:      ${{ secrets.CF_ACCOUNT_ID }}
+          CF_API_TOKEN:       ${{ secrets.CF_API_TOKEN }}
+          D1_DATABASE_ID:     ${{ secrets.D1_DATABASE_ID }}
           GMAIL_FROM:         ${{ secrets.GMAIL_FROM }}
           GMAIL_TO:           ${{ secrets.GMAIL_TO }}
           GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
-        run: |
-          echo "Sending daily digest..."
-          python github-actions/scripts/daily_digest.py
-          echo "Email sent ✅"
+        run: python github-actions/scripts/daily_digest.py
