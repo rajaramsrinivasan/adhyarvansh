@@ -1020,6 +1020,60 @@
   </div>
 </div>
 
+
+<!-- Fund Detail Modal -->
+<div class="modal-overlay" id="fund-detail-modal">
+  <div class="modal" style="max-width:600px;padding:0;overflow:hidden">
+    <div id="fd-header" style="padding:24px 28px 20px;border-bottom:1px solid var(--border)">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start">
+        <div style="flex:1;padding-right:16px">
+          <div id="fd-name" style="font-family:'DM Serif Display',serif;font-size:18px;line-height:1.3;color:var(--text)"></div>
+          <div id="fd-meta" style="font-size:12px;color:var(--muted);margin-top:4px"></div>
+        </div>
+        <div style="display:flex;flex-direction:column;align-items:flex-end;gap:8px;flex-shrink:0">
+          <div id="fd-signal"></div>
+          <button onclick="closeFundDetail()" style="background:none;border:none;font-size:20px;color:var(--muted);cursor:pointer;line-height:1">×</button>
+        </div>
+      </div>
+    </div>
+    <div style="padding:20px 28px;max-height:72vh;overflow-y:auto">
+      <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:20px">
+        <div id="fd-r1" style="background:var(--bg);border-radius:10px;padding:14px;text-align:center"></div>
+        <div id="fd-r3" style="background:var(--bg);border-radius:10px;padding:14px;text-align:center"></div>
+        <div id="fd-r5" style="background:var(--bg);border-radius:10px;padding:14px;text-align:center"></div>
+      </div>
+      <div id="fd-ai-box" style="background:var(--accent-lt);border-radius:10px;padding:16px;margin-bottom:16px;display:none">
+        <div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;color:var(--accent);margin-bottom:8px">AI Analysis</div>
+        <div id="fd-rationale" style="font-size:13.5px;color:var(--text);line-height:1.6"></div>
+        <div id="fd-sig-ctx" style="margin-top:10px;padding:8px 12px;border-radius:6px;font-size:12px;font-weight:500;background:rgba(0,0,0,.04)"></div>
+        <div style="margin-top:12px;display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px">
+          <div style="text-align:center"><div style="font-size:10px;color:var(--muted);text-transform:uppercase;margin-bottom:4px">Expected 1Y</div><div id="fd-exp1y" style="font-size:13px;font-weight:600;color:var(--accent)"></div></div>
+          <div style="text-align:center"><div style="font-size:10px;color:var(--muted);text-transform:uppercase;margin-bottom:4px">Expected 3Y</div><div id="fd-exp3y" style="font-size:13px;font-weight:600;color:var(--accent)"></div></div>
+          <div style="text-align:center"><div style="font-size:10px;color:var(--muted);text-transform:uppercase;margin-bottom:4px">Expected 5Y</div><div id="fd-exp5y" style="font-size:13px;font-weight:600;color:var(--accent)"></div></div>
+        </div>
+      </div>
+      <div style="background:var(--bg);border-radius:10px;padding:16px;margin-bottom:16px">
+        <div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;color:var(--muted);margin-bottom:12px">Risk profile</div>
+        <div style="display:flex;align-items:center;gap:12px;margin-bottom:8px">
+          <div id="fd-risk-dots" style="display:flex;gap:4px"></div>
+          <div id="fd-risk-label" style="font-size:14px;font-weight:600"></div>
+        </div>
+        <div id="fd-risk-detail" style="font-size:12.5px;color:var(--muted);line-height:1.6"></div>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:20px">
+        <div style="background:var(--bg);border-radius:8px;padding:12px"><div style="font-size:10px;text-transform:uppercase;color:var(--muted);margin-bottom:4px">Current NAV</div><div id="fd-nav" style="font-size:18px;font-weight:600"></div></div>
+        <div style="background:var(--bg);border-radius:8px;padding:12px"><div style="font-size:10px;text-transform:uppercase;color:var(--muted);margin-bottom:4px">Category</div><div id="fd-category" style="font-size:14px;font-weight:500"></div></div>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-bottom:12px">
+        <button onclick="fdBuyNow()" style="padding:12px;background:var(--accent);color:#fff;border:none;border-radius:8px;font-size:13.5px;font-weight:600;font-family:'DM Sans',sans-serif;cursor:pointer">+ Buy Now</button>
+        <button id="fd-watch-btn" onclick="fdAddWatchlist()" style="padding:12px;background:var(--surface);color:var(--text);border:1.5px solid var(--border);border-radius:8px;font-size:13.5px;font-weight:500;font-family:'DM Sans',sans-serif;cursor:pointer">☆ Watchlist</button>
+        <a id="fd-amfi-link" href="#" target="_blank" style="padding:12px;background:var(--surface);color:var(--accent);border:1.5px solid var(--border);border-radius:8px;font-size:13.5px;font-weight:500;font-family:'DM Sans',sans-serif;text-decoration:none;display:flex;align-items:center;justify-content:center">AMFI ↗</a>
+      </div>
+      <div id="fd-watchlist-note" style="display:none;font-size:12px;color:var(--green);text-align:center;padding:8px;background:var(--green-lt);border-radius:6px">Added to watchlist</div>
+    </div>
+  </div>
+</div>
+
 <div class="toast" id="toast"></div>
 
 <script>
@@ -1637,6 +1691,163 @@ async function submitExit() {
     showToast(e.message, 'error')
   }
 }
+
+
+// ── Fund detail modal ──────────────────────────────────────────────────────────
+let _fdFund = null
+
+function openFundDetail(jsonStr) {
+  const f = JSON.parse(jsonStr)
+  _fdFund = f
+
+  const r1 = f.return_1y != null ? parseFloat(f.return_1y) : null
+  const r3 = f.return_3y != null ? parseFloat(f.return_3y) : null
+  const r5 = f.return_5y != null ? parseFloat(f.return_5y) : null
+
+  // Header
+  document.getElementById('fd-name').textContent = f.fund_name
+  document.getElementById('fd-meta').textContent = `${f.amc_name || ''} · ${f.category || ''} · ${f.sub_category || ''}`
+  document.getElementById('fd-signal').innerHTML = f.signal ? signalPill(f.signal) : ''
+
+  // Returns
+  const retHTML = (label, actual, emin, emax) => {
+    const hasA  = actual != null
+    const color = hasA ? returnColor(actual) : 'var(--muted)'
+    const expLine = (emin != null && emax != null)
+      ? `<div style="font-size:10px;color:var(--accent);margin-top:4px">AI: ${pct(emin)} – ${pct(emax)}</div>` : ''
+    return `<div style="font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;color:var(--muted);margin-bottom:6px">${label}</div>
+      <div style="font-size:22px;font-weight:600;color:${color}">${hasA ? pct(actual) : '—'}</div>
+      ${expLine}`
+  }
+  document.getElementById('fd-r1').innerHTML = retHTML('1 Year CAGR', r1, f.expected_1y_min, f.expected_1y_max)
+  document.getElementById('fd-r3').innerHTML = retHTML('3 Year CAGR', r3, f.expected_3y_min, f.expected_3y_max)
+  document.getElementById('fd-r5').innerHTML = retHTML('5 Year CAGR', r5, f.expected_5y_min, f.expected_5y_max)
+
+  // AI analysis
+  if (f.rationale) {
+    document.getElementById('fd-ai-box').style.display = 'block'
+    document.getElementById('fd-rationale').textContent = f.rationale
+
+    // Signal-specific context
+    const sigCtx = {
+      buy:   '📈 Strong buy signal — momentum, consistent returns, suitable to add more',
+      hold:  '✋ Hold signal — performing well, maintain your position',
+      watch: '👀 Watch signal — mixed signals, monitor closely before deciding',
+      exit:  '⚠️ Exit signal — underperforming peers, better alternatives available'
+    }
+    const sig = (f.signal||'').toLowerCase()
+    if (sigCtx[sig]) {
+      const box = document.getElementById('fd-ai-box')
+      const ctx = document.createElement('div')
+      ctx.style.cssText = 'margin-top:10px;padding:8px 12px;border-radius:6px;font-size:12px;font-weight:500;background:rgba(0,0,0,.04)'
+      ctx.textContent = sigCtx[sig]
+      box.appendChild(ctx)
+    }
+
+    document.getElementById('fd-exp1y').textContent =
+      (f.expected_1y_min != null && f.expected_1y_max != null) ? `${pct(f.expected_1y_min)} – ${pct(f.expected_1y_max)}` : '—'
+    document.getElementById('fd-exp3y').textContent =
+      (f.expected_3y_min != null && f.expected_3y_max != null) ? `${pct(f.expected_3y_min)} – ${pct(f.expected_3y_max)}` : '—'
+    document.getElementById('fd-exp5y').textContent =
+      (f.expected_5y_min != null && f.expected_5y_max != null) ? `${pct(f.expected_5y_min)} – ${pct(f.expected_5y_max)}` : '—'
+  } else {
+    document.getElementById('fd-ai-box').style.display = 'none'
+  }
+
+  // Risk breakdown
+  const riskScore = parseInt(f.risk_score) || 0
+  const riskColors = ['','#16A34A','#65A30D','#CA8A04','#EA580C','#DC2626']
+  const riskDescs = {
+    1: 'Very low volatility. Suitable for capital preservation. Returns close to FD rates.',
+    2: 'Low volatility. Small fluctuations. Suitable for conservative investors.',
+    3: 'Moderate volatility. Balanced risk-return. Suitable for most investors.',
+    4: 'High volatility. Significant fluctuations possible. For investors with 5+ year horizon.',
+    5: 'Very high volatility. Can drop 40-60% in downturns. Only for aggressive investors.'
+  }
+  const catRisk = {
+    'Large Cap': 'Large-cap funds invest in top 100 companies — relatively stable.',
+    'Mid Cap': 'Mid-cap funds can be volatile but offer higher growth potential.',
+    'Small Cap': 'Small-cap funds are highly volatile but can give exceptional returns over 7+ years.',
+    'ELSS': 'Tax-saving fund with 3-year lock-in. Equity risk with tax benefit under 80C.',
+    'Index': 'Passively tracks an index. Lower cost, market-matching returns.',
+    'Hybrid': 'Mixes equity and debt for balanced risk.',
+    'Balanced Advantage': 'Dynamically adjusts equity-debt ratio based on market conditions.',
+    'Flexi Cap': 'Can invest across market caps — manager has flexibility.',
+    'Debt': 'Invests in bonds and fixed income. Lower risk than equity.',
+  }
+
+  let dotsHtml = ''
+  for (let i=1; i<=5; i++) {
+    dotsHtml += `<div style="width:12px;height:12px;border-radius:50%;background:${i<=riskScore ? riskColors[riskScore] : 'var(--border)'}"></div>`
+  }
+  document.getElementById('fd-risk-dots').innerHTML = dotsHtml
+  document.getElementById('fd-risk-label').textContent = f.risk_label || '—'
+  document.getElementById('fd-risk-label').style.color = riskColors[riskScore] || 'var(--muted)'
+
+  const subDesc = catRisk[f.sub_category] || catRisk[f.category] || ''
+  document.getElementById('fd-risk-detail').innerHTML =
+    `${riskDescs[riskScore] || ''}${subDesc ? '<br><span style="margin-top:4px;display:inline-block">' + subDesc + '</span>' : ''}`
+
+  // NAV and category
+  document.getElementById('fd-nav').textContent = `₹${parseFloat(f.latest_nav||0).toFixed(4)}`
+  document.getElementById('fd-category').textContent = `${f.category || '—'} · ${f.sub_category || ''}`
+
+  // AMFI link — search AMFI by scheme code
+  const amfiUrl = `https://www.amfiindia.com/nav-history-download?mf=${encodeURIComponent(f.scheme_code)}`
+  document.getElementById('fd-amfi-link').href = `https://www.amfiindia.com/spages/NAVopen.txt`
+  // Better AMFI search link
+  document.getElementById('fd-amfi-link').href =
+    `https://www.amfiindia.com/nav-history-download?mf=${f.scheme_code}`
+
+  document.getElementById('fd-watchlist-note').style.display = 'none'
+
+  // Clean up any previous signal context appended
+  const aiBox = document.getElementById('fd-ai-box')
+  const extra = aiBox.querySelector('div:last-child[style*="rgba"]')
+  if (extra) extra.remove()
+
+  document.getElementById('fund-detail-modal').classList.add('open')
+}
+
+function closeFundDetail() {
+  document.getElementById('fund-detail-modal').classList.remove('open')
+  _fdFund = null
+}
+
+function fdBuyNow() {
+  if (!_fdFund) return
+  closeFundDetail()
+  addFundToPortfolio(_fdFund.scheme_code, _fdFund.fund_name, _fdFund.category||'', _fdFund.amc_name||'')
+}
+
+function fdAddWatchlist() {
+  if (!_fdFund) return
+  // Store watchlist in localStorage
+  const wl = JSON.parse(localStorage.getItem('adhy_watchlist') || '[]')
+  const exists = wl.find(w => w.scheme_code === _fdFund.scheme_code)
+  if (!exists) {
+    wl.push({
+      scheme_code: _fdFund.scheme_code,
+      fund_name:   _fdFund.fund_name,
+      category:    _fdFund.category,
+      amc_name:    _fdFund.amc_name,
+      signal:      _fdFund.signal,
+      return_1y:   _fdFund.return_1y,
+      added_at:    new Date().toISOString()
+    })
+    localStorage.setItem('adhy_watchlist', JSON.stringify(wl))
+  }
+  const btn = document.getElementById('fd-watch-btn')
+  btn.textContent = exists ? '★ Already in watchlist' : '★ Added!'
+  btn.style.background = 'var(--green-lt)'
+  btn.style.color = 'var(--green)'
+  btn.style.borderColor = 'var(--green)'
+  document.getElementById('fd-watchlist-note').style.display = 'block'
+}
+
+document.getElementById('fund-detail-modal').addEventListener('click', e => {
+  if (e.target === e.currentTarget) closeFundDetail()
+})
 
 // Close modals on overlay click
 document.getElementById('add-modal').addEventListener('click', e => {
