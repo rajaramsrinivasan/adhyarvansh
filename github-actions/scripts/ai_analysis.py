@@ -1,203 +1,164 @@
 """
-ai_analysis.py
-Reads funds from mf_cache, calls Claude API for each batch
-Stores risk scores, signals and expected returns in ai_recommendations table
-
-Run: python ai_analysis.py
-Schedule: GitHub Actions cron — runs after sync_mf_data.py daily
+ai_analysis.py — Claude AI analysis writing to D1 via Cloudflare REST API
+Reads from mf_cache in D1, sends batches to Claude, writes ai_recommendations back to D1
 """
-
-import os
-import json
-import time
-import logging
-import psycopg2
-import psycopg2.extras
+import os, json, time, logging, asyncio, aiohttp
 import anthropic
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger(__name__)
 
-DATABASE_URL      = os.environ["DATABASE_URL"]
+CF_ACCOUNT_ID     = os.environ["CF_ACCOUNT_ID"]
+CF_API_TOKEN      = os.environ["CF_API_TOKEN"]
+D1_DATABASE_ID    = os.environ["D1_DATABASE_ID"]
 ANTHROPIC_API_KEY = os.environ["ANTHROPIC_API_KEY"]
 
-# Only analyse funds with sufficient return history
-# and prioritise equity/hybrid over debt for AI analysis
-# (debt funds have simpler signals)
-BATCH_SIZE  = 20   # funds per Claude API call
-MAX_FUNDS   = 2000  # analyse top 2000 funds by AUM / returns daily
+D1_URL     = f"https://api.cloudflare.com/client/v4/accounts/{CF_ACCOUNT_ID}/d1/database/{D1_DATABASE_ID}/query"
+BATCH_SIZE = 20
+MAX_FUNDS  = 2000
+
+CF_HEADERS = {"Authorization": f"Bearer {CF_API_TOKEN}", "Content-Type": "application/json"}
 
 
-def get_conn():
-    return psycopg2.connect(DATABASE_URL, cursor_factory=psycopg2.extras.RealDictCursor)
+# ── D1 helpers ────────────────────────────────────────────────────────────────
+
+async def d1_query(session, sql, params=None):
+    body = {"sql": sql}
+    if params: body["params"] = params
+    async with session.post(D1_URL, headers=CF_HEADERS, json=body) as r:
+        data = await r.json()
+        if not data.get("success"):
+            raise Exception(f"D1 error: {data.get('errors', data)}")
+        results = data.get("result", [])
+        if results and isinstance(results, list):
+            return results[0].get("results", [])
+        return []
 
 
-def analyse_batch(client, funds: list) -> list:
-    """
-    Send a batch of funds to Claude and get structured JSON recommendations back.
-    Returns list of recommendation dicts.
-    """
-    fund_lines = []
+async def d1_run(session, sql, params=None):
+    body = {"sql": sql}
+    if params: body["params"] = params
+    async with session.post(D1_URL, headers=CF_HEADERS, json=body) as r:
+        data = await r.json()
+        if not data.get("success"):
+            raise Exception(f"D1 error: {data.get('errors', data)}")
+
+
+# ── Claude analysis ───────────────────────────────────────────────────────────
+
+def analyse_batch(client, funds):
+    lines = []
     for f in funds:
-        line = (
-            f"- scheme_code: {f['scheme_code']} | {f['fund_name'][:60]} | "
-            f"Category: {f['category']} | AMC: {f['amc_name']} | "
-            f"NAV: {f['latest_nav']} | "
-            f"1Y: {f['return_1y']}% | 3Y: {f['return_3y']}% | 5Y: {f['return_5y']}%"
+        lines.append(
+            f"- code:{f['scheme_code']} | {f['fund_name'][:55]} | "
+            f"{f['category']} | {f.get('amc_name','')} | "
+            f"1Y:{f.get('return_1y')}% 3Y:{f.get('return_3y')}% 5Y:{f.get('return_5y')}%"
         )
-        fund_lines.append(line)
 
-    funds_text = "\n".join(fund_lines)
+    prompt = f"""You are an expert Indian mutual fund analyst. Analyse these funds and return a JSON array.
 
-    prompt = f"""You are an expert Indian mutual fund analyst. Analyse the following mutual funds and provide investment signals.
+FUNDS:
+{chr(10).join(lines)}
 
-FUNDS TO ANALYSE:
-{funds_text}
+For EACH fund return exactly:
+{{
+  "scheme_code": "...",
+  "signal": "buy"|"hold"|"watch"|"exit",
+  "risk_score": 1-5,
+  "risk_label": "Very Low"|"Low"|"Moderate"|"High"|"Very High",
+  "expected_1y_min": number,
+  "expected_1y_max": number,
+  "expected_3y_min": number,
+  "expected_3y_max": number,
+  "expected_5y_min": number,
+  "expected_5y_max": number,
+  "rationale": "1-2 sentences"
+}}
 
-For each fund, provide a JSON object with these exact fields:
-- scheme_code: (copy from input)
-- signal: one of "buy", "hold", "watch", "exit"
-  * buy = strong momentum, good risk-adjusted returns, suitable to add
-  * hold = currently held funds performing well, maintain position
-  * watch = mixed signals, monitor closely
-  * exit = underperforming peers, better alternatives available
-- risk_score: integer 1-5 (1=very low risk, 5=very high risk)
-- risk_label: "Very Low" / "Low" / "Moderate" / "High" / "Very High"
-- expected_1y_min: conservative expected return % next 1 year
-- expected_1y_max: optimistic expected return % next 1 year
-- expected_3y_min: conservative expected CAGR % next 3 years
-- expected_3y_max: optimistic expected CAGR % next 3 years
-- expected_5y_min: conservative expected CAGR % next 5 years
-- expected_5y_max: optimistic expected CAGR % next 5 years
-- rationale: 1-2 sentence plain English explanation of the signal
+Rules:
+- buy = strong 1Y momentum, consistent 3Y/5Y, good category rank
+- hold = steady performer, maintain position
+- watch = mixed signals, monitor
+- exit = underperforming peers, better alternatives exist
+- risk_score 1=very low (liquid/gilt) to 5=very high (small cap)
+- expected returns = realistic CAGR range % for next period
 
-Base your analysis on:
-1. Historical returns trend (1Y vs 3Y vs 5Y) — is performance consistent?
-2. Category benchmarks — how does it compare to peers?
-3. Risk profile — volatility implied by category and returns variance
-4. Momentum — recent 1Y vs longer term
+Respond ONLY with valid JSON array. No markdown, no backticks, no explanation."""
 
-Respond ONLY with a valid JSON array — no markdown, no explanation, no backticks.
-Example: [{{"scheme_code":"100001","signal":"hold","risk_score":3,...}}, ...]"""
-
-    response = client.messages.create(
+    resp = client.messages.create(
         model="claude-sonnet-4-20250514",
         max_tokens=4000,
         messages=[{"role": "user", "content": prompt}]
     )
-
-    raw = response.content[0].text.strip()
-
-    # Strip any accidental markdown fences
+    raw = resp.content[0].text.strip()
     if raw.startswith("```"):
         raw = raw.split("```")[1]
-        if raw.startswith("json"):
-            raw = raw[4:]
-    raw = raw.strip()
-
-    return json.loads(raw)
+        if raw.startswith("json"): raw = raw[4:]
+    return json.loads(raw.strip())
 
 
-def save_recommendations(conn, recommendations: list):
-    cur = conn.cursor()
-    for rec in recommendations:
+async def save_recommendations(session, recs):
+    for rec in recs:
         try:
-            cur.execute("""
+            await d1_run(session, """
                 INSERT INTO ai_recommendations
-                    (scheme_code, signal, risk_score, risk_label,
-                     expected_1y_min, expected_1y_max,
-                     expected_3y_min, expected_3y_max,
-                     expected_5y_min, expected_5y_max,
-                     rationale, generated_at)
-                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s, NOW())
-                ON CONFLICT (scheme_code) DO UPDATE SET
-                    signal          = EXCLUDED.signal,
-                    risk_score      = EXCLUDED.risk_score,
-                    risk_label      = EXCLUDED.risk_label,
-                    expected_1y_min = EXCLUDED.expected_1y_min,
-                    expected_1y_max = EXCLUDED.expected_1y_max,
-                    expected_3y_min = EXCLUDED.expected_3y_min,
-                    expected_3y_max = EXCLUDED.expected_3y_max,
-                    expected_5y_min = EXCLUDED.expected_5y_min,
-                    expected_5y_max = EXCLUDED.expected_5y_max,
-                    rationale       = EXCLUDED.rationale,
-                    generated_at    = NOW()
-            """, (
-                str(rec["scheme_code"]),
-                rec.get("signal", "watch"),
-                int(rec.get("risk_score", 3)),
-                rec.get("risk_label", "Moderate"),
-                float(rec.get("expected_1y_min", 0)),
-                float(rec.get("expected_1y_max", 0)),
-                float(rec.get("expected_3y_min", 0)),
-                float(rec.get("expected_3y_max", 0)),
-                float(rec.get("expected_5y_min", 0)),
-                float(rec.get("expected_5y_max", 0)),
-                rec.get("rationale", "")[:500]
-            ))
+                  (scheme_code,signal,risk_score,risk_label,
+                   expected_1y_min,expected_1y_max,expected_3y_min,expected_3y_max,
+                   expected_5y_min,expected_5y_max,rationale,generated_at)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,datetime('now'))
+                ON CONFLICT(scheme_code) DO UPDATE SET
+                  signal=excluded.signal, risk_score=excluded.risk_score,
+                  risk_label=excluded.risk_label,
+                  expected_1y_min=excluded.expected_1y_min, expected_1y_max=excluded.expected_1y_max,
+                  expected_3y_min=excluded.expected_3y_min, expected_3y_max=excluded.expected_3y_max,
+                  expected_5y_min=excluded.expected_5y_min, expected_5y_max=excluded.expected_5y_max,
+                  rationale=excluded.rationale, generated_at=excluded.generated_at""",
+                [str(rec["scheme_code"]), rec.get("signal","watch"),
+                 int(rec.get("risk_score",3)), rec.get("risk_label","Moderate"),
+                 float(rec.get("expected_1y_min",0)), float(rec.get("expected_1y_max",0)),
+                 float(rec.get("expected_3y_min",0)), float(rec.get("expected_3y_max",0)),
+                 float(rec.get("expected_5y_min",0)), float(rec.get("expected_5y_max",0)),
+                 str(rec.get("rationale",""))[:500]])
         except Exception as e:
             log.warning(f"Failed to save rec for {rec.get('scheme_code')}: {e}")
-    conn.commit()
-    cur.close()
 
 
-def run_ai_analysis():
-    conn   = get_conn()
+async def main():
+    start  = time.time()
     client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
 
-    # Fetch funds that need analysis — prioritise equity, then hybrid, then debt
-    # Focus on funds with at least 1Y return history
-    with conn.cursor() as cur:
-        cur.execute("""
-            SELECT m.scheme_code, m.fund_name, m.category, m.amc_name,
-                   m.latest_nav, m.return_1y, m.return_3y, m.return_5y
-            FROM mf_cache m
-            WHERE m.return_1y IS NOT NULL
+    async with aiohttp.ClientSession() as session:
+        # Fetch top funds from D1
+        funds = await d1_query(session, f"""
+            SELECT scheme_code, fund_name, category, amc_name,
+                   return_1y, return_3y, return_5y
+            FROM mf_cache
+            WHERE return_1y IS NOT NULL
             ORDER BY
-                CASE m.category
-                    WHEN 'Equity'  THEN 1
-                    WHEN 'Hybrid'  THEN 2
-                    WHEN 'Debt'    THEN 3
-                    ELSE 4
-                END,
-                m.return_1y DESC NULLS LAST
-            LIMIT %s
-        """, (MAX_FUNDS,))
-        funds = [dict(r) for r in cur.fetchall()]
+              CASE category WHEN 'Equity' THEN 1 WHEN 'Hybrid' THEN 2 ELSE 3 END,
+              return_1y DESC
+            LIMIT {MAX_FUNDS}""")
 
-    log.info(f"Analysing {len(funds)} funds in batches of {BATCH_SIZE} ...")
+        log.info(f"Analysing {len(funds)} funds in batches of {BATCH_SIZE}...")
+        saved = 0
 
-    total_saved = 0
-    for i in range(0, len(funds), BATCH_SIZE):
-        batch = funds[i:i + BATCH_SIZE]
-        batch_num = i // BATCH_SIZE + 1
+        for i in range(0, len(funds), BATCH_SIZE):
+            batch = funds[i:i+BATCH_SIZE]
+            try:
+                recs = analyse_batch(client, batch)
+                await save_recommendations(session, recs)
+                saved += len(recs)
+                log.info(f"Batch {i//BATCH_SIZE+1}: saved {len(recs)} | total={saved}")
+                time.sleep(0.5)
+            except json.JSONDecodeError as e:
+                log.error(f"Batch {i//BATCH_SIZE+1} JSON error: {e}")
+                time.sleep(5)
+            except Exception as e:
+                log.error(f"Batch {i//BATCH_SIZE+1} error: {e}")
+                time.sleep(3)
 
-        try:
-            recs = analyse_batch(client, batch)
-            save_recommendations(conn, recs)
-            total_saved += len(recs)
-            log.info(f"Batch {batch_num}: saved {len(recs)} recommendations")
-
-            # Respect Claude API rate limits
-            time.sleep(1)
-
-        except json.JSONDecodeError as e:
-            log.error(f"Batch {batch_num}: JSON parse error — {e}")
-            time.sleep(5)
-        except anthropic.RateLimitError:
-            log.warning(f"Batch {batch_num}: rate limited — waiting 60s")
-            time.sleep(60)
-        except Exception as e:
-            log.error(f"Batch {batch_num}: error — {e}")
-            time.sleep(3)
-
-    conn.close()
-    log.info(f"✅ AI analysis complete — {total_saved} recommendations saved")
-    return total_saved
-
+    elapsed = round(time.time()-start)
+    log.info(f"✅ AI analysis done — {saved} recommendations in {elapsed//60}m {elapsed%60}s")
 
 if __name__ == "__main__":
-    start = time.time()
-    saved = run_ai_analysis()
-    elapsed = round(time.time() - start, 1)
-    log.info(f"Total time: {elapsed}s")
+    asyncio.run(main())
