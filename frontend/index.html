@@ -803,6 +803,9 @@
     <button class="nav-item" onclick="showPage('journal')" id="nav-journal">
       <span class="nav-icon">≡</span> Journal
     </button>
+    <button class="nav-item" onclick="showPage('watchlist')" id="nav-watchlist">
+      <span class="nav-icon">★</span> Watchlist
+    </button>
 
     <div class="sidebar-bottom">
       <div class="user-chip">
@@ -915,6 +918,20 @@
 
       <div id="portfolio-content">
         <div class="loading-center"><div class="spinner"></div> Loading portfolio…</div>
+      </div>
+    </div>
+
+    <!-- ── Watchlist ── -->
+    <div class="page" id="page-watchlist">
+      <div class="page-header">
+        <div>
+          <div class="page-title">Watchlist</div>
+          <div class="page-subtitle">Funds you are monitoring — saved on this device</div>
+        </div>
+        <button class="btn-sm" onclick="clearWatchlist()" style="color:var(--red);border-color:var(--red)">Clear all</button>
+      </div>
+      <div id="watchlist-content">
+        <div class="loading-center"><div class="spinner"></div> Loading watchlist...</div>
       </div>
     </div>
 
@@ -1272,6 +1289,7 @@ function showPage(name) {
   if (name === 'funds')     loadFunds(1)
   if (name === 'portfolio') loadPortfolio()
   if (name === 'journal')   loadJournal()
+  if (name === 'watchlist') loadWatchlist()
 }
 
 // ── Dashboard ──────────────────────────────────────────────
@@ -1864,6 +1882,65 @@ document.addEventListener('keydown', e => {
     else if (document.getElementById('register-form').style.display !== 'none') doRegister()
   }
 })
+
+// ── Watchlist ─────────────────────────────────────────────────────────────────
+function loadWatchlist() {
+  var el = document.getElementById('watchlist-content')
+  var wl = JSON.parse(localStorage.getItem('adhy_watchlist') || '[]')
+
+  if (!wl.length) {
+    el.innerHTML = '<div class="empty-state">' +
+      '<div class="empty-icon">&#9733;</div>' +
+      '<div class="empty-title">Watchlist is empty</div>' +
+      '<div class="empty-sub">Click Watchlist on any fund card to add it here</div>' +
+      '</div>'
+    return
+  }
+
+  var html = '<div class="cards-grid">'
+  for (var i = 0; i < wl.length; i++) {
+    var f   = wl[i]
+    var sig = f.signal ? signalPill(f.signal) : ''
+    var r1  = f.return_1y != null ? '<span style="color:' + returnColor(f.return_1y) + '">' + pct(f.return_1y) + '</span>' : '&mdash;'
+    var dt  = f.added_at ? new Date(f.added_at).toLocaleDateString('en-IN') : '&mdash;'
+    var enc = encodeURIComponent(JSON.stringify(f))
+    html += '<div class="fund-card">' +
+      '<div class="fund-card-top" onclick="openFundDetail(decodeURIComponent('' + enc + ''))" style="cursor:pointer">' +
+        '<div>' +
+          '<div class="fund-name">' + (f.fund_name || '').substring(0,55) + '</div>' +
+          '<div class="fund-amc">' + (f.amc_name || '') + ' &middot; <span class="tag">' + (f.category || 'Other') + '</span></div>' +
+        '</div>' + sig +
+      '</div>' +
+      '<div class="returns-row">' +
+        '<div class="return-box"><div class="return-label">1 Year</div><div class="return-value">' + r1 + '</div></div>' +
+        '<div class="return-box"><div class="return-label">Added</div><div class="return-value" style="font-size:12px;color:var(--muted)">' + dt + '</div></div>' +
+        '<div class="return-box"><div class="return-label">Remove</div>' +
+          '<div style="margin-top:6px"><button onclick="removeFromWatchlist('' + f.scheme_code + '')" ' +
+          'style="font-size:11px;padding:3px 10px;border:1px solid var(--border);border-radius:4px;background:none;cursor:pointer;color:var(--red)">Remove</button></div>' +
+        '</div>' +
+      '</div>' +
+    '</div>'
+  }
+  html += '</div><p style="margin-top:16px;font-size:12px;color:var(--muted);text-align:center">' +
+    wl.length + ' fund' + (wl.length === 1 ? '' : 's') + ' in watchlist &middot; Saved on this device</p>'
+  el.innerHTML = html
+}
+
+function removeFromWatchlist(code) {
+  var wl = JSON.parse(localStorage.getItem('adhy_watchlist') || '[]')
+  wl = wl.filter(function(f) { return f.scheme_code !== code })
+  localStorage.setItem('adhy_watchlist', JSON.stringify(wl))
+  loadWatchlist()
+  showToast('Removed from watchlist')
+}
+
+function clearWatchlist() {
+  if (!confirm('Clear entire watchlist?')) return
+  localStorage.removeItem('adhy_watchlist')
+  loadWatchlist()
+  showToast('Watchlist cleared')
+}
+
 </script>
 </body>
 </html>
