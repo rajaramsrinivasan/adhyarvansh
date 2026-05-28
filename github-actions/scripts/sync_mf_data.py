@@ -112,6 +112,16 @@ async def fetch_and_store(session, scheme_code, fund_name, semaphore):
                 nav_data = data.get("data", [])
                 if not nav_data: return False
 
+                # Skip funds with stale NAV (no update in 90 days)
+                from datetime import datetime
+                try:
+                    latest_date = datetime.strptime(nav_data[0]["date"], "%d-%m-%Y")
+                    days_old = (datetime.now() - latest_date).days
+                    if days_old > 90:
+                        return False  # Skip stale closed-ended funds
+                except:
+                    pass
+
                 row = {
                     "scheme_code":  str(scheme_code),
                     "fund_name":    fund_name,
