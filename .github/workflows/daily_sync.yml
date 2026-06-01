@@ -29,15 +29,23 @@ jobs:
           D1_DATABASE_ID: ${{ secrets.D1_DATABASE_ID }}
         run: python github-actions/scripts/sync_mf_data.py
 
-      - name: Step 2 — AI analysis (Claude)
+      - name: Step 2 — AI analysis (Tier 1 scoring + Tier 2 verdicts)
         env:
           CF_ACCOUNT_ID:     ${{ secrets.CF_ACCOUNT_ID }}
           CF_API_TOKEN:      ${{ secrets.CF_API_TOKEN }}
           D1_DATABASE_ID:    ${{ secrets.D1_DATABASE_ID }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          # Set to "true" to run free Tier-1 scoring only (no Claude calls).
+          # Set to "false" once credits are topped up to enable written verdicts.
+          SKIP_TIER2:        "true"
+          # Optional overrides (defaults shown):
+          # VERDICT_STALE_DAYS: "14"
+          # MAX_FUNDS:          "2000"
+          # BATCH_SIZE:         "15"
         run: python github-actions/scripts/ai_analysis.py
 
       - name: Step 3 — Daily email digest
+        if: always()   # run even if AI analysis errored, so the digest isn't blocked
         env:
           CF_ACCOUNT_ID:      ${{ secrets.CF_ACCOUNT_ID }}
           CF_API_TOKEN:       ${{ secrets.CF_API_TOKEN }}
