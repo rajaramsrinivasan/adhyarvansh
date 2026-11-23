@@ -1,0 +1,20 @@
+name = "adhyarvansh"
+main = "worker.js"
+compatibility_date = "2026-05-20"
+account_id = "f1a38280438ca9c4d6bd885d3234d79f"
+
+# ── D1 database (binding: env.DB) ──
+[[d1_databases]]
+binding = "DB"
+database_name = "adhyarvansh-db"
+database_id = "4691e389-bb17-49ab-9d1d-d515da4a984f"
+
+# ── KV namespace (binding: env.MF_CACHE) ──
+[[kv_namespaces]]
+binding = "MF_CACHE"
+id = "798d70ad6b174e42b2d835d30d90717e"
+
+# NOTE: env.JWT_SECRET is a Worker *secret*, not declared here.
+# Secrets are managed separately in the Cloudflare dashboard /
+# `wrangler secret put` and persist across deploys — do not add it
+# to this file (it would be committed in plaintext).
