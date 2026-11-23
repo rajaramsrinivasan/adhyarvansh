@@ -528,6 +528,58 @@ async function makeJWT(userId, email, secret) {
   return `${h}.${p}.${sig}`
 }
 
+// Supabase JWKS endpoint (ES256 public keys). Cached in KV to avoid refetching.
+const SUPABASE_JWKS_URL = 'https://ybctubrwzostmaslrlxz.supabase.co/auth/v1/.well-known/jwks.json'
+
+function b64urlToBytes(s) {
+  return Uint8Array.from(atob(s.replace(/-/g,'+').replace(/_/g,'/')), c => c.charCodeAt(0))
+}
+function decodeJwtPart(s) {
+  return JSON.parse(new TextDecoder().decode(b64urlToBytes(s)))
+}
+
+async function getSupabaseJwks(env) {
+  // Cache the JWKS in KV for 1h; keys rotate rarely.
+  try {
+    const cached = await env.MF_CACHE.get('supabase_jwks')
+    if (cached) return JSON.parse(cached)
+  } catch (e) {}
+  const r = await fetch(SUPABASE_JWKS_URL)
+  if (!r.ok) throw Object.assign(new Error('JWKS fetch failed'), { status: 401 })
+  const jwks = await r.json()
+  try { await env.MF_CACHE.put('supabase_jwks', JSON.stringify(jwks), { expirationTtl: 3600 }) } catch (e) {}
+  return jwks
+}
+
+async function verifySupabaseJWT(token, env) {
+  const [h, p, s] = token.split('.')
+  const header = decodeJwtPart(h)
+  const data   = decodeJwtPart(p)
+  if (data.exp && data.exp < Date.now()/1000) throw Object.assign(new Error('Token expired'), { status:401 })
+
+  const jwks = await getSupabaseJwks(env)
+  const jwk  = (jwks.keys || []).find(k => k.kid === header.kid) || (jwks.keys || [])[0]
+  if (!jwk) throw Object.assign(new Error('No matching key'), { status:401 })
+
+  const key = await crypto.subtle.importKey(
+    'jwk',
+    { kty: jwk.kty, crv: jwk.crv, x: jwk.x, y: jwk.y, ext: true },
+    { name: 'ECDSA', namedCurve: 'P-256' },
+    false,
+    ['verify']
+  )
+  const sig = b64urlToBytes(s)
+  const ok2 = await crypto.subtle.verify(
+    { name: 'ECDSA', hash: 'SHA-256' },
+    key, sig, new TextEncoder().encode(`${h}.${p}`)
+  )
+  if (!ok2) throw Object.assign(new Error('Invalid token'), { status:401 })
+
+  // Normalise to the shape the rest of the worker expects: .sub = user id,
+  // plus .email and a .supabase flag for downstream handlers.
+  return { sub: data.sub, email: data.email, supabase: true, name: (data.user_metadata && data.user_metadata.name) || '' }
+}
+
 async function verifyJWT(request, env) {
   const hdr   = request.headers.get('Authorization') || ''
   const token = hdr.replace('Bearer ','').trim()
@@ -535,6 +587,17 @@ async function verifyJWT(request, env) {
   const parts = token.split('.')
   if (parts.length !== 3) throw Object.assign(new Error('Bad token'), { status:401 })
   const [h, p, s] = parts
+
+  // Route by signing algorithm in the JWT header.
+  let header
+  try { header = decodeJwtPart(h) } catch (e) { throw Object.assign(new Error('Bad token header'), { status:401 }) }
+
+  if (header.alg === 'ES256') {
+    // Supabase token
+    return verifySupabaseJWT(token, env)
+  }
+
+  // Legacy HS256 token (old password login) — kept during transition.
   const data = JSON.parse(atob(p.replace(/-/g,'+').replace(/_/g,'/')))
   if (data.exp < Date.now()/1000) throw Object.assign(new Error('Token expired'), { status:401 })
   const k = await crypto.subtle.importKey('raw', new TextEncoder().encode(env.JWT_SECRET),
