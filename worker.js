@@ -172,7 +172,7 @@ async function portfolioRouter(request, env, path, method) {
     if (path === '/portfolio/all'     && method === 'GET')  return await listAllInvestments(env, userToken)
     if (path === '/portfolio/exits'   && method === 'GET')  return await listExits(env, userToken)
     if (path === '/portfolio'         && method === 'GET')  return await listHoldings(env, userToken)
-    if (path === '/portfolio'         && method === 'POST') return await addInvestment(request, env, userToken)
+    if (path === '/portfolio'         && method === 'POST') return await addInvestment(request, env, userToken, uid)
     return err('Not found', 404)
   } catch (e) {
     return err(e.message || 'Portfolio error', e.status || 500)
@@ -217,7 +217,7 @@ async function listHoldings(env, userToken) {
   return ok(out)
 }
 
-async function addInvestment(request, env, userToken) {
+async function addInvestment(request, env, userToken, uid) {
   let b
   try { b = await request.json() } catch { return err('Invalid JSON', 400) }
   const { scheme_code, fund_name, category, amc_name, units, purchase_nav, purchase_date, notes } = b
@@ -228,6 +228,7 @@ async function addInvestment(request, env, userToken) {
   const invested = Math.round(parseFloat(units) * parseFloat(purchase_nav) * 100) / 100
   // RLS requires user_id = auth.uid(); include it explicitly.
   const row = {
+    user_id: uid,                       // required by RLS: auth.uid() = user_id
     scheme_code: sc, fund_name, category: category || null, amc_name: amc_name || null,
     units: parseFloat(units), purchase_nav: parseFloat(purchase_nav),
     purchase_date, invested_amount: invested, is_active: true, notes: notes || null
@@ -257,6 +258,7 @@ async function recordExit(request, env, userToken, uid, entryId) {
   await sbRest(userToken, 'journal_exits', {
     method: 'POST',
     body: {
+      user_id: uid,                       // required by RLS: auth.uid() = user_id
       portfolio_entry_id: entryId, scheme_code: e.scheme_code, fund_name: e.fund_name,
       units_sold: parseFloat(units_sold), exit_nav: parseFloat(exit_nav), exit_date,
       exit_amount: exitAmt, realised_gain: gain, holding_days: days, tax_type: tax, notes: notes || null
