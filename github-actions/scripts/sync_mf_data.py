@@ -12,6 +12,7 @@ GitHub Secrets needed:
 import os, json, time, logging, asyncio, aiohttp
 from datetime import datetime
 from dateutil.relativedelta import relativedelta
+from fund_metrics import compute_metrics
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger(__name__)
@@ -85,26 +86,13 @@ async def fetch_json(session, url, *, retries=4, base_delay=1.5, timeout=25, hea
     return None
 
 
-async def d1_upsert(session, row):
+METRIC_COLS = [("m_sharpe", "REAL"), ("m_sortino", "REAL"), ("m_maxdd", "REAL"),
+               ("m_vol", "REAL"), ("m_consistency", "REAL"), ("m_days", "INTEGER")]
+
+
+async def d1_exec(session, sql, params=None):
     headers = {"Authorization": f"Bearer {CF_API_TOKEN}", "Content-Type": "application/json"}
-    body = {
-        "sql": """INSERT INTO mf_cache
-            (scheme_code,fund_name,category,sub_category,amc_name,
-             latest_nav,nav_date,return_1y,return_3y,return_5y,last_synced)
-          VALUES (?,?,?,?,?,?,?,?,?,?,datetime('now'))
-          ON CONFLICT(scheme_code) DO UPDATE SET
-            fund_name=excluded.fund_name, category=excluded.category,
-            sub_category=excluded.sub_category, amc_name=excluded.amc_name,
-            latest_nav=excluded.latest_nav, nav_date=excluded.nav_date,
-            return_1y=excluded.return_1y, return_3y=excluded.return_3y,
-            return_5y=excluded.return_5y, last_synced=excluded.last_synced""",
-        "params": [row["scheme_code"], row["fund_name"], row["category"],
-                   row["sub_category"], row["amc_name"], row["latest_nav"],
-                   row["nav_date"], row["return_1y"], row["return_3y"], row["return_5y"]]
-    }
-    async with session.post(D1_URL, headers=headers, json=body) as r:
-        # Cloudflare returns JSON, but parse defensively so a transient 5xx
-        # surfaces as a readable error instead of a ContentTypeError.
+    async with session.post(D1_URL, headers=headers, json={"sql": sql, "params": params or []}) as r:
         text = await r.text()
         try:
             data = json.loads(text)
@@ -112,6 +100,40 @@ async def d1_upsert(session, row):
             raise Exception(f"D1 non-JSON response (HTTP {r.status}): {text[:160]}")
         if not data.get("success"):
             raise Exception(str(data.get("errors", "")))
+
+
+async def ensure_metric_columns(session):
+    """Add the metric columns to mf_cache if they are missing (safe to repeat)."""
+    for name, typ in METRIC_COLS:
+        try:
+            await d1_exec(session, f"ALTER TABLE mf_cache ADD COLUMN {name} {typ}")
+        except Exception as e:
+            if "duplicate column" not in str(e).lower():
+                raise
+
+
+async def d1_upsert(session, row):
+    m = row.get("metrics") or {}
+    await d1_exec(session, """INSERT INTO mf_cache
+            (scheme_code,fund_name,category,sub_category,amc_name,
+             latest_nav,nav_date,return_1y,return_3y,return_5y,
+             m_sharpe,m_sortino,m_maxdd,m_vol,m_consistency,m_days,last_synced)
+          VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,datetime('now'))
+          ON CONFLICT(scheme_code) DO UPDATE SET
+            fund_name=excluded.fund_name, category=excluded.category,
+            sub_category=excluded.sub_category, amc_name=excluded.amc_name,
+            latest_nav=excluded.latest_nav, nav_date=excluded.nav_date,
+            return_1y=excluded.return_1y, return_3y=excluded.return_3y,
+            return_5y=excluded.return_5y,
+            m_sharpe=excluded.m_sharpe, m_sortino=excluded.m_sortino,
+            m_maxdd=excluded.m_maxdd, m_vol=excluded.m_vol,
+            m_consistency=excluded.m_consistency, m_days=excluded.m_days,
+            last_synced=excluded.last_synced""",
+        [row["scheme_code"], row["fund_name"], row["category"],
+         row["sub_category"], row["amc_name"], row["latest_nav"],
+         row["nav_date"], row["return_1y"], row["return_3y"], row["return_5y"],
+         m.get("sharpe_ratio"), m.get("sortino_ratio"), m.get("max_drawdown"),
+         m.get("std_dev"), m.get("consistency_pct"), m.get("metrics_days")])
 
 
 def calc_cagr(nav_data, years):
@@ -196,6 +218,7 @@ async def fetch_and_store(session, scheme_code, fund_name, semaphore):
                 "return_1y":    calc_cagr(nav_data, 1),
                 "return_3y":    calc_cagr(nav_data, 3),
                 "return_5y":    calc_cagr(nav_data, 5),
+                "metrics":      compute_metrics(nav_data),
             }
             await d1_upsert(session, row)
             return True
@@ -210,6 +233,7 @@ async def main():
 
     connector = aiohttp.TCPConnector(limit=CONCURRENCY, ttl_dns_cache=300)
     async with aiohttp.ClientSession(connector=connector) as session:
+        await ensure_metric_columns(session)
         # ── Load the full scheme list (this is the call that was crashing) ──
         all_funds = await fetch_json(session, MFAPI_BASE, retries=5, timeout=40)
         if not all_funds:
