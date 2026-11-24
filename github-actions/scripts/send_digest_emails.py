@@ -82,8 +82,8 @@ def render_email(name, freq, news, funds):
 <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#F1EEFF"><tr><td align="center" style="padding:16px 12px">
 <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:600px;background:#FFFFFF;border-radius:20px;overflow:hidden;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif">
   <tr><td style="background:#0B1033;background-image:linear-gradient(135deg,#0B1033 0%,#2B1A78 60%,#7C3AED 100%);padding:26px 28px">
-    <div style="font-size:24px;font-weight:800;color:#FFFFFF;letter-spacing:-.4px">Adhyarvansh</div>
-    <div style="font-size:14px;color:#CFC6FF;margin-top:4px">{esc(title)} &nbsp;·&nbsp; {today}</div>
+    <a href="{SITE}" style="text-decoration:none"><img src="{SITE}/brand/email-logo.png" width="210" height="44" alt="Adhyarvansh" style="display:block;border:0;outline:none;width:210px;height:auto;font-size:24px;font-weight:800;color:#FFFFFF;letter-spacing:-.4px"></a>
+    <div style="font-size:14px;color:#CFC6FF;margin-top:10px">{esc(title)} &nbsp;·&nbsp; {today}</div>
   </td></tr>
   <tr><td style="height:4px;background:#7C3AED;background-image:linear-gradient(90deg,#7C3AED,#D946EF,#06C5F0)"></td></tr>
   <tr><td style="padding:24px 28px 4px"><div style="font-size:16px;line-height:1.5;color:{INK}">{hello} here is what moved in the fund industry{" this week" if freq == "weekly" else " lately"}.</div>
