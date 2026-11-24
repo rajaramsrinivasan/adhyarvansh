@@ -784,7 +784,13 @@ async function profileRouter(request, env, path, method) {
   try {
     if (path === '/profile/prefs' && method === 'GET') {
       const rows = await sbRest(userToken, 'user_prefs?select=digest_freq,statement_freq,fund_prefs&limit=1')
-      return ok((rows && rows[0]) || { digest_freq: 'weekly', statement_freq: 'monthly', fund_prefs: null })
+      if (rows && rows[0]) return ok(rows[0])
+      // first visit: save the defaults shown in Settings so scheduled emails know this user's choice
+      const def = { digest_freq: 'weekly', statement_freq: 'monthly', fund_prefs: null }
+      try {
+        await sbRest(userToken, 'user_prefs?on_conflict=user_id', { method: 'POST', body: [{ user_id: uid, digest_freq: 'weekly', statement_freq: 'monthly' }], prefer: 'resolution=ignore-duplicates,return=minimal' })
+      } catch (e) { /* table may not exist yet; still return defaults */ }
+      return ok(def)
     }
     if (path === '/profile/prefs' && method === 'PUT') {
       const b = await request.json()
