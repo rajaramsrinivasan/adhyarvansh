@@ -5,6 +5,9 @@ on:
     - cron: '30 2 * * *'   # 8:00 AM IST daily
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
   daily-run:
     runs-on: ubuntu-latest
