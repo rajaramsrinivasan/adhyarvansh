@@ -46,6 +46,10 @@ VERDICT_STALE_DAYS = int(os.environ.get("VERDICT_STALE_DAYS", "14"))
 BATCH_SIZE         = int(os.environ.get("BATCH_SIZE",         "15"))
 MODEL              = os.environ.get("MODEL", "claude-sonnet-4-20250514")
 SKIP_TIER2         = os.environ.get("SKIP_TIER2", "false").lower() == "true"
+# 1 = live scoring uses the original return-based rules (v1).
+# 2 = live scoring uses v2 (adds Sharpe, Sortino, drawdown, consistency).
+# Both are always computed and stored side by side (composite_score_v2 / signal_v2).
+ENGINE_VERSION     = os.environ.get("ENGINE_VERSION", "1").strip()
 
 D1_URL     = f"https://api.cloudflare.com/client/v4/accounts/{CF_ACCOUNT_ID}/d1/database/{D1_DATABASE_ID}/query"
 CF_HEADERS = {"Authorization": f"Bearer {CF_API_TOKEN}", "Content-Type": "application/json"}
@@ -235,26 +239,127 @@ def composite_score(fund: dict) -> dict:
     }
 
 
+def signal_for(score: float) -> str:
+    if score >= 80: return "STRONG BUY"
+    if score >= 65: return "BUY"
+    if score >= 50: return "HOLD"
+    if score >= 35: return "WATCH"
+    return "AVOID"
+
+
+# Typical worst fall (%) for each risk bracket. A fund that falls much less than
+# its bracket usually is doing something right; much more is a warning sign.
+TYPICAL_DRAWDOWN = {"Very High": 35, "High": 28, "Moderate": 22, "Low": 8, "Very Low": 3}
+
+
+def composite_score_v2(fund: dict, v1: dict) -> dict:
+    """
+    v2 = v1 (returns, momentum, risk bracket) plus risk-adjusted checks from the
+    fund's own NAV history. Weights follow the Layer 1 table, scaled to this score:
+      Sharpe  > 1.2 good / < 0.8 weak        (+8 / -8)
+      Sortino > 1.5 good / < 1.0 weak        (+5 / -5)
+      Max drawdown vs the typical fall for its risk bracket   (+5 / -6)
+      Consistency (rolling 1-year windows beating 6.5%)       (+6 / -6)
+    Funds with under ~1 year of NAV history keep their v1 score unchanged.
+    """
+    score = v1["composite_score"]
+    layers = json.loads(v1["signal_layers"]) if v1.get("signal_layers") else []
+    sharpe, sortino = fund.get("m_sharpe"), fund.get("m_sortino")
+    mdd, cons = fund.get("m_maxdd"), fund.get("m_consistency")
+    if fund.get("m_days") is None or sharpe is None:
+        layers.append("v2: not enough NAV history")
+        return {"score": score, "signal": signal_for(score), "layers": layers}
+
+    if sharpe > 1.2:   score += 8;  layers.append("Sharpe>1.2")
+    elif sharpe < 0.8: score -= 8;  layers.append("Sharpe<0.8")
+    if sortino is not None:
+        if sortino > 1.5:   score += 5; layers.append("Sortino>1.5")
+        elif sortino < 1.0: score -= 5; layers.append("Sortino<1.0")
+    if mdd is not None:
+        typ = TYPICAL_DRAWDOWN.get(v1["risk_label"], 22)
+        fall = abs(mdd)
+        if fall <= typ * 0.8:    score += 5; layers.append("small drawdown")
+        elif fall >= typ * 1.25: score -= 6; layers.append("deep drawdown")
+    if cons is not None:
+        if cons >= 75:   score += 6; layers.append("consistency>=75%")
+        elif cons < 45:  score -= 6; layers.append("consistency<45%")
+        elif cons >= 60: score += 2; layers.append("consistency>=60%")
+
+    score = max(0.0, min(100.0, round(score, 1)))
+    return {"score": score, "signal": signal_for(score), "layers": layers}
+
+
+def _report_engine_comparison(moves, total, with_metrics):
+    """Log (and write to the Actions summary) how v2 differs from v1."""
+    order = ["STRONG BUY", "BUY", "HOLD", "WATCH", "AVOID"]
+    changed = sum(n for (a, b), n in moves.items() if a != b)
+    lines = [f"### Scoring engine: v1 vs v2 (live = v{ENGINE_VERSION})",
+             f"{total} funds scored, {with_metrics} with enough NAV history for v2 checks, "
+             f"{changed} change signal ({(changed / total * 100) if total else 0:.1f}%).",
+             "", "| v1 \\ v2 | " + " | ".join(order) + " |", "|---|" + "---|" * len(order)]
+    for a in order:
+        lines.append(f"| **{a}** | " + " | ".join(str(moves.get((a, b), 0)) for b in order) + " |")
+    text = "\n".join(lines)
+    log.info("\n%s", text)
+    path = os.environ.get("GITHUB_STEP_SUMMARY")
+    if path:
+        with open(path, "a") as f:
+            f.write(text + "\n")
+
+
 async def run_tier1(session):
     """
     Tier 1: score ALL equity/hybrid funds. Writes to ai_recommendations.
     No Claude calls. Cost = zero.
     """
-    log.info("── TIER 1: Loading funds from mf_cache ──")
+    log.info("── TIER 1: Loading funds from mf_cache (engine v%s live) ──", ENGINE_VERSION)
+    # Make sure the new columns exist (safe to repeat; ignores "duplicate column")
+    for tbl, col, typ in (("mf_cache", "m_sharpe", "REAL"), ("mf_cache", "m_sortino", "REAL"),
+                          ("mf_cache", "m_maxdd", "REAL"), ("mf_cache", "m_vol", "REAL"),
+                          ("mf_cache", "m_consistency", "REAL"), ("mf_cache", "m_days", "INTEGER"),
+                          ("ai_recommendations", "composite_score_v2", "REAL"),
+                          ("ai_recommendations", "signal_v2", "TEXT"),
+                          ("ai_recommendations", "layers_v2", "TEXT")):
+        try:
+            await d1_run(session, f"ALTER TABLE {tbl} ADD COLUMN {col} {typ}")
+        except Exception as e:
+            if "duplicate column" not in str(e).lower():
+                raise
     rows = await d1_query(session,
         "SELECT scheme_code, fund_name, category, sub_category, amc_name, "
-        "       latest_nav, return_1y, return_3y, return_5y "
+        "       latest_nav, return_1y, return_3y, return_5y, "
+        "       m_sharpe, m_sortino, m_maxdd, m_vol, m_consistency, m_days "
         "FROM mf_cache "
         "WHERE category IN ('Equity','Hybrid') "
         f"LIMIT {MAX_FUNDS}"
     )
     log.info("Tier 1: %d funds loaded", len(rows))
 
+    from collections import Counter
+    moves = Counter()
+    with_metrics = 0
     upserted = 0
     errors   = 0
     for fund in rows:
         try:
-            sc = composite_score(fund)
+            sc  = composite_score(fund)
+            sc2 = composite_score_v2(fund, sc)
+            moves[(sc["signal"], sc2["signal"])] += 1
+
+            # Real NAV-based risk numbers replace the rough proxies when we have them
+            if fund.get("m_days") is not None and fund.get("m_sharpe") is not None:
+                with_metrics += 1
+                sc["sharpe_ratio"]    = fund["m_sharpe"]
+                sc["sortino_ratio"]   = fund["m_sortino"]
+                sc["max_drawdown"]    = fund["m_maxdd"]
+                sc["std_dev"]         = fund["m_vol"]
+                sc["consistency_pct"] = fund["m_consistency"] or 0.0
+
+            if ENGINE_VERSION == "2":
+                sc["composite_score"] = sc2["score"]
+                sc["signal"]          = sc2["signal"]
+                sc["signal_layers"]   = json.dumps(sc2["layers"])
+
             await d1_run(session,
                 """INSERT INTO ai_recommendations
                      (scheme_code, composite_score, signal, risk_score, risk_label,
@@ -263,8 +368,9 @@ async def run_tier1(session):
                       expected_1y_min, expected_1y_max,
                       expected_3y_min, expected_3y_max,
                       expected_5y_min, expected_5y_max,
+                      composite_score_v2, signal_v2, layers_v2,
                       generated_at)
-                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,datetime('now'))
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,datetime('now'))
                    ON CONFLICT(scheme_code) DO UPDATE SET
                      composite_score=excluded.composite_score,
                      signal=excluded.signal,
@@ -282,6 +388,9 @@ async def run_tier1(session):
                      expected_3y_max=excluded.expected_3y_max,
                      expected_5y_min=excluded.expected_5y_min,
                      expected_5y_max=excluded.expected_5y_max,
+                     composite_score_v2=excluded.composite_score_v2,
+                     signal_v2=excluded.signal_v2,
+                     layers_v2=excluded.layers_v2,
                      generated_at=excluded.generated_at""",
                 [
                     fund["scheme_code"],
@@ -293,6 +402,7 @@ async def run_tier1(session):
                     sc["expected_1y_min"], sc["expected_1y_max"],
                     sc["expected_3y_min"], sc["expected_3y_max"],
                     sc["expected_5y_min"], sc["expected_5y_max"],
+                    sc2["score"], sc2["signal"], json.dumps(sc2["layers"]),
                 ]
             )
             upserted += 1
@@ -300,6 +410,7 @@ async def run_tier1(session):
             log.warning("Tier 1 failed for %s: %s", fund.get("scheme_code"), e)
             errors += 1
 
+    _report_engine_comparison(moves, upserted, with_metrics)
     log.info("Tier 1 done: %d scored, %d errors", upserted, errors)
     return upserted
 
