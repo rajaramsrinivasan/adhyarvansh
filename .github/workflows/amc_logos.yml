@@ -1,0 +1,26 @@
+name: Fetch AMC logos
+
+on:
+  schedule:
+    - cron: '30 3 1 * *'   # monthly, 1st at 9:00 AM IST
+  workflow_dispatch:
+
+jobs:
+  logos:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+          cache-dependency-path: github-actions/requirements.txt
+      - name: Install dependencies
+        run: pip install -r github-actions/requirements.txt
+      - name: Fetch and store AMC logos
+        env:
+          CF_ACCOUNT_ID:  ${{ secrets.CF_ACCOUNT_ID }}
+          CF_API_TOKEN:   ${{ secrets.CF_API_TOKEN }}
+          D1_DATABASE_ID: ${{ secrets.D1_DATABASE_ID }}
+        run: python github-actions/scripts/fetch_amc_logos.py
