@@ -12,3 +12,7 @@ alter table public.user_prefs enable row level security;
 create policy "own prefs select" on public.user_prefs for select using (auth.uid() = user_id);
 create policy "own prefs insert" on public.user_prefs for insert with check (auth.uid() = user_id);
 create policy "own prefs update" on public.user_prefs for update using (auth.uid() = user_id);
+
+-- Table privileges (newer Supabase projects do not grant these automatically)
+grant select, insert, update, delete on public.user_prefs to authenticated;
+grant all on public.user_prefs to service_role;
