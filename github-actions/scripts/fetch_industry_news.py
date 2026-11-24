@@ -25,9 +25,6 @@ def gnews(q):
 # (source label, url, general?)  general=True means the feed is broad, so keyword scoring must pass.
 FEEDS = [
     ("Economic Times", "https://economictimes.indiatimes.com/markets/rssfeeds/1977021501.cms", True),
-    ("Moneycontrol",   "https://www.moneycontrol.com/rss/MCtopnews.xml", True),
-    ("Moneycontrol",   "https://www.moneycontrol.com/rss/mfnews.xml", False),
-    ("Business Standard", "https://www.business-standard.com/rss/markets-106.rss", True),
     ("Mint",           "https://www.livemint.com/rss/money", True),
     ("Google News",    gnews("mutual funds India when:7d"), False),
     ("Google News",    gnews("AMFI SIP inflows when:7d"), False),

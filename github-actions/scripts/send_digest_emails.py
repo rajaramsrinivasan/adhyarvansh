@@ -168,7 +168,17 @@ async def main():
     now = datetime.now(timezone.utc)
     async with aiohttp.ClientSession() as s:
         rows = await sb(s, "/rest/v1/user_prefs?select=user_id,digest_freq,last_digest_at&digest_freq=in.(daily,weekly)")
-        log.info("%d users opted in", len(rows or []))
+        total = await sb(s, "/rest/v1/user_prefs?select=user_id")
+        log.info("user_prefs rows: %d total, %d opted in to the digest", len(total or []), len(rows or []))
+        if a.only and not any(True for _ in rows or []):
+            # test mode: find the user by email even if they have no preferences row yet
+            page = await sb(s, "/auth/v1/admin/users?per_page=200")
+            for u in (page or {}).get("users", []):
+                if (u.get("email") or "").lower() == a.only.lower():
+                    log.info("test mode: no prefs row for %s, using weekly defaults", a.only)
+                    rows = [{"user_id": u["id"], "digest_freq": "weekly", "last_digest_at": None}]
+            if not rows:
+                log.error("test mode: no account found with email %s", a.only)
         sent = failed = 0
         os.makedirs("preview", exist_ok=True)
         for row in rows or []:
@@ -185,7 +195,9 @@ async def main():
                 if a.dry_run:
                     open(f"preview/{row['user_id'][:8]}.html", "w").write(body); log.info("preview written for %s", row["user_id"][:8]); continue
                 await send(s, email, subject, body, text)
+                log.info("Resend accepted the email for %s", email)
                 await sb(s, f"/rest/v1/user_prefs?user_id=eq.{row['user_id']}", "PATCH", {"last_digest_at": now.strftime("%Y-%m-%dT%H:%M:%SZ")}, "return=minimal")
+                log.info("sent to %s", email)
                 sent += 1
             except Exception as e:
                 failed += 1; log.error("user %s failed: %s", str(row.get("user_id"))[:8], e)
