@@ -289,22 +289,109 @@ def composite_score_v2(fund: dict, v1: dict) -> dict:
     return {"score": score, "signal": signal_for(score), "layers": layers}
 
 
-def _report_engine_comparison(moves, total, with_metrics):
-    """Log (and write to the Actions summary) how v2 differs from v1."""
+def peer_quartiles(rows):
+    """
+    Rank each fund against others in its sub-category (3-year return and Sharpe,
+    averaged). Returns {scheme_code: {"q": 1..4, "ret": 0-1, "sharpe": 0-1}}, where
+    q 1 = top quarter and the 0-1 values are percentile ranks (1 = best).
+    Needs 8+ peers in the sub-category.
+    """
+    groups = {}
+    for f in rows:
+        groups.setdefault(f.get("sub_category") or "?", []).append(f)
+
+    def pct_ranks(funds, key):
+        vals = sorted(f[key] for f in funds if f.get(key) is not None)
+        n = len(vals)
+        out = {}
+        for f in funds:
+            v = f.get(key)
+            if v is not None and n > 1:
+                out[f["scheme_code"]] = sum(1 for x in vals if x < v) / (n - 1)
+        return out
+
+    res = {}
+    for funds in groups.values():
+        if len(funds) < 8:
+            continue
+        a, b = pct_ranks(funds, "return_3y"), pct_ranks(funds, "m_sharpe")
+        for f in funds:
+            code = f["scheme_code"]
+            if code in a and code in b:
+                p = (a[code] + b[code]) / 2          # 1.0 = best
+                res[code] = {"q": 1 if p >= 0.75 else 2 if p >= 0.5 else 3 if p >= 0.25 else 4,
+                             "ret": a[code], "sharpe": b[code]}
+    return res
+
+
+def composite_score_v3(fund: dict, v2: dict, peer) -> dict:
+    """
+    v3 = v2 plus checks against the fund's benchmark and its peers.
+      Alpha (Jensen, needs benchmark fit R2 >= 0.6)   > 2 good (+6) / < 0 weak (-6)
+      Alpha with protection: upside capture > 100 and downside capture < 90   (+5)
+      Weak protection: downside capture > 110                                  (-4)
+      Information ratio  > 0.5 (+3) / < 0 (-3)
+      Peer quartile in sub-category: Q1 +5, Q2 +2, Q4 -5
+      Efficiency gap: top-half peer returns but bottom-half Sharpe             (-4)
+      Decelerating alpha: positive alpha but 1Y return 8+ pts under its 3Y     (-3)
+    Index funds are judged on tracking instead: error under 0.5% a year makes the
+    fund a mandatory Buy (score floor 65); over 1.0% costs 8 points.
+    """
+    score = v2["score"]
+    layers = list(v2["layers"])
+    alpha, beta, r2 = fund.get("m_alpha"), fund.get("m_beta"), fund.get("m_r2")
+    up, dn, ir, te = fund.get("m_upcap"), fund.get("m_downcap"), fund.get("m_info"), fund.get("m_te")
+    is_index = fund.get("sub_category") == "Index"
+    quartile = (peer or {}).get("q")
+
+    if is_index:
+        if te is None:
+            layers.append("v3: tracking error unavailable")
+        elif te < 0.5:
+            score = max(score, 65.0); layers.append("index: tracking error<0.5%")
+        elif te > 1.0:
+            score -= 8; layers.append("index: tracking error>1%")
+    else:
+        if alpha is not None and r2 is not None and r2 >= 0.6:
+            if alpha > 2:    score += 6; layers.append("alpha>2%")
+            elif alpha < 0:  score -= 6; layers.append("alpha<0")
+            if up is not None and dn is not None:
+                if up > 100 and dn < 90: score += 5; layers.append("alpha with protection")
+                elif dn > 110:           score -= 4; layers.append("falls harder than benchmark")
+            if ir is not None:
+                if ir > 0.5:   score += 3; layers.append("info ratio>0.5")
+                elif ir < 0:   score -= 3; layers.append("info ratio<0")
+            r1, r3 = fund.get("return_1y"), fund.get("return_3y")
+            if alpha > 0 and r1 is not None and r3 is not None and r1 < r3 - 8:
+                score -= 3; layers.append("decelerating alpha")
+        elif alpha is None:
+            layers.append("v3: no benchmark data")
+        if quartile == 1:   score += 5; layers.append("peer Q1")
+        elif quartile == 2: score += 2; layers.append("peer Q2")
+        elif quartile == 4: score -= 5; layers.append("peer Q4")
+        if peer and peer["ret"] >= 0.5 and peer["sharpe"] < 0.5:
+            score -= 4; layers.append("efficiency gap")
+
+    score = max(0.0, min(100.0, round(score, 1)))
+    return {"score": score, "signal": signal_for(score), "layers": layers}
+
+
+def _report_engine_comparison(moves, total, with_metrics, a="v1", b="v2", extra=""):
+    """Log (and write to the Actions summary) how engine b differs from engine a."""
     order = ["STRONG BUY", "BUY", "HOLD", "WATCH", "AVOID"]
-    changed = sum(n for (a, b), n in moves.items() if a != b)
-    lines = [f"### Scoring engine: v1 vs v2 (live = v{ENGINE_VERSION})",
-             f"{total} funds scored, {with_metrics} with enough NAV history for v2 checks, "
-             f"{changed} change signal ({(changed / total * 100) if total else 0:.1f}%).",
-             "", "| v1 \\ v2 | " + " | ".join(order) + " |", "|---|" + "---|" * len(order)]
-    for a in order:
-        lines.append(f"| **{a}** | " + " | ".join(str(moves.get((a, b), 0)) for b in order) + " |")
+    changed = sum(n for (x, y), n in moves.items() if x != y)
+    lines = [f"### Scoring engine: {a} vs {b} (live = v{ENGINE_VERSION})",
+             f"{total} funds scored, {with_metrics} with enough data for the {b} checks, "
+             f"{changed} change signal ({(changed / total * 100) if total else 0:.1f}%)." + extra,
+             "", f"| {a} \\ {b} | " + " | ".join(order) + " |", "|---|" + "---|" * len(order)]
+    for x in order:
+        lines.append(f"| **{x}** | " + " | ".join(str(moves.get((x, y), 0)) for y in order) + " |")
     text = "\n".join(lines)
     log.info("\n%s", text)
     path = os.environ.get("GITHUB_STEP_SUMMARY")
     if path:
         with open(path, "a") as f:
-            f.write(text + "\n")
+            f.write(text + "\n\n")
 
 
 async def run_tier1(session):
@@ -319,7 +406,15 @@ async def run_tier1(session):
                           ("mf_cache", "m_consistency", "REAL"), ("mf_cache", "m_days", "INTEGER"),
                           ("ai_recommendations", "composite_score_v2", "REAL"),
                           ("ai_recommendations", "signal_v2", "TEXT"),
-                          ("ai_recommendations", "layers_v2", "TEXT")):
+                          ("ai_recommendations", "layers_v2", "TEXT"),
+                          ("ai_recommendations", "composite_score_v3", "REAL"),
+                          ("ai_recommendations", "signal_v3", "TEXT"),
+                          ("ai_recommendations", "layers_v3", "TEXT"),
+                          ("ai_recommendations", "peer_quartile", "INTEGER"),
+                          ("mf_cache", "m_alpha", "REAL"), ("mf_cache", "m_beta", "REAL"),
+                          ("mf_cache", "m_r2", "REAL"), ("mf_cache", "m_upcap", "REAL"),
+                          ("mf_cache", "m_downcap", "REAL"), ("mf_cache", "m_info", "REAL"),
+                          ("mf_cache", "m_te", "REAL"), ("mf_cache", "m_bench", "TEXT")):
         try:
             await d1_run(session, f"ALTER TABLE {tbl} ADD COLUMN {col} {typ}")
         except Exception as e:
@@ -328,7 +423,8 @@ async def run_tier1(session):
     rows = await d1_query(session,
         "SELECT scheme_code, fund_name, category, sub_category, amc_name, "
         "       latest_nav, return_1y, return_3y, return_5y, "
-        "       m_sharpe, m_sortino, m_maxdd, m_vol, m_consistency, m_days "
+        "       m_sharpe, m_sortino, m_maxdd, m_vol, m_consistency, m_days, "
+        "       m_alpha, m_beta, m_r2, m_upcap, m_downcap, m_info, m_te, m_bench "
         "FROM mf_cache "
         "WHERE category IN ('Equity','Hybrid') "
         f"LIMIT {MAX_FUNDS}"
@@ -337,14 +433,22 @@ async def run_tier1(session):
 
     from collections import Counter
     moves = Counter()
+    moves23 = Counter()
     with_metrics = 0
+    with_bench = 0
+    peers = peer_quartiles(rows)
     upserted = 0
     errors   = 0
     for fund in rows:
         try:
             sc  = composite_score(fund)
             sc2 = composite_score_v2(fund, sc)
+            peer = peers.get(fund["scheme_code"])
+            sc3 = composite_score_v3(fund, sc2, peer)
             moves[(sc["signal"], sc2["signal"])] += 1
+            moves23[(sc2["signal"], sc3["signal"])] += 1
+            if fund.get("m_alpha") is not None or fund.get("m_te") is not None:
+                with_bench += 1
 
             # Real NAV-based risk numbers replace the rough proxies when we have them
             if fund.get("m_days") is not None and fund.get("m_sharpe") is not None:
@@ -355,10 +459,11 @@ async def run_tier1(session):
                 sc["std_dev"]         = fund["m_vol"]
                 sc["consistency_pct"] = fund["m_consistency"] or 0.0
 
-            if ENGINE_VERSION == "2":
-                sc["composite_score"] = sc2["score"]
-                sc["signal"]          = sc2["signal"]
-                sc["signal_layers"]   = json.dumps(sc2["layers"])
+            if ENGINE_VERSION in ("2", "3"):
+                live = sc3 if ENGINE_VERSION == "3" else sc2
+                sc["composite_score"] = live["score"]
+                sc["signal"]          = live["signal"]
+                sc["signal_layers"]   = json.dumps(live["layers"])
 
             await d1_run(session,
                 """INSERT INTO ai_recommendations
@@ -369,8 +474,9 @@ async def run_tier1(session):
                       expected_3y_min, expected_3y_max,
                       expected_5y_min, expected_5y_max,
                       composite_score_v2, signal_v2, layers_v2,
+                      composite_score_v3, signal_v3, layers_v3, peer_quartile,
                       generated_at)
-                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,datetime('now'))
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,datetime('now'))
                    ON CONFLICT(scheme_code) DO UPDATE SET
                      composite_score=excluded.composite_score,
                      signal=excluded.signal,
@@ -391,6 +497,10 @@ async def run_tier1(session):
                      composite_score_v2=excluded.composite_score_v2,
                      signal_v2=excluded.signal_v2,
                      layers_v2=excluded.layers_v2,
+                     composite_score_v3=excluded.composite_score_v3,
+                     signal_v3=excluded.signal_v3,
+                     layers_v3=excluded.layers_v3,
+                     peer_quartile=excluded.peer_quartile,
                      generated_at=excluded.generated_at""",
                 [
                     fund["scheme_code"],
@@ -403,6 +513,8 @@ async def run_tier1(session):
                     sc["expected_3y_min"], sc["expected_3y_max"],
                     sc["expected_5y_min"], sc["expected_5y_max"],
                     sc2["score"], sc2["signal"], json.dumps(sc2["layers"]),
+                    sc3["score"], sc3["signal"], json.dumps(sc3["layers"]),
+                    peer["q"] if peer else None,
                 ]
             )
             upserted += 1
@@ -410,7 +522,9 @@ async def run_tier1(session):
             log.warning("Tier 1 failed for %s: %s", fund.get("scheme_code"), e)
             errors += 1
 
-    _report_engine_comparison(moves, upserted, with_metrics)
+    _report_engine_comparison(moves, upserted, with_metrics, "v1", "v2")
+    _report_engine_comparison(moves23, upserted, with_bench, "v2", "v3",
+                              f" {len(peers)} funds have a peer quartile.")
     log.info("Tier 1 done: %d scored, %d errors", upserted, errors)
     return upserted
 

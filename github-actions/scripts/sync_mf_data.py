@@ -12,7 +12,7 @@ GitHub Secrets needed:
 import os, json, time, logging, asyncio, aiohttp
 from datetime import datetime
 from dateutil.relativedelta import relativedelta
-from fund_metrics import compute_metrics
+from fund_metrics import compute_metrics, compute_relative
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger(__name__)
@@ -87,7 +87,61 @@ async def fetch_json(session, url, *, retries=4, base_delay=1.5, timeout=25, hea
 
 
 METRIC_COLS = [("m_sharpe", "REAL"), ("m_sortino", "REAL"), ("m_maxdd", "REAL"),
-               ("m_vol", "REAL"), ("m_consistency", "REAL"), ("m_days", "INTEGER")]
+               ("m_vol", "REAL"), ("m_consistency", "REAL"), ("m_days", "INTEGER"),
+               ("m_alpha", "REAL"), ("m_beta", "REAL"), ("m_r2", "REAL"),
+               ("m_upcap", "REAL"), ("m_downcap", "REAL"), ("m_info", "REAL"),
+               ("m_te", "REAL"), ("m_bench", "TEXT")]
+
+# Benchmarks: a plain Direct-Growth index fund per index. mfapi.in has no index
+# series of its own, and an index fund tracks its index closely enough for this.
+BENCH_MATCH = {
+    "NIFTY50":  ["NIFTY 50 INDEX"],
+    "NIFTY500": ["NIFTY 500 INDEX"],
+    "MID150":   ["MIDCAP 150 INDEX"],
+    "SMALL250": ["SMALLCAP 250 INDEX"],
+}
+BENCH_LABEL = {"NIFTY50": "Nifty 50", "NIFTY500": "Nifty 500",
+               "MID150": "Nifty Midcap 150", "SMALL250": "Nifty Smallcap 250"}
+BENCH_SKIP = ("IDCW", "DIVIDEND", "REGULAR", "ETF", "FOF", "NEXT", "EQUAL", "MOMENTUM",
+              "QUALITY", "VALUE", "LOW VOL", "ALPHA", "ENHANCED", "FUND OF FUND", "PAYOUT")
+BENCH_FOR_SUB = {"Large Cap": "NIFTY50", "Flexi Cap": "NIFTY500", "ELSS": "NIFTY500",
+                 "Equity": "NIFTY500", "Mid Cap": "MID150", "Small Cap": "SMALL250"}
+
+
+def benchmark_key(sub_category, fund_name):
+    """Which benchmark applies to a fund; for index funds, only the index it tracks."""
+    n = fund_name.upper()
+    if sub_category == "Index":
+        for key, pats in (("MID150", ["MIDCAP 150"]), ("SMALL250", ["SMALLCAP 250"]),
+                          ("NIFTY500", ["NIFTY 500"]), ("NIFTY50", ["NIFTY 50 ", "NIFTY50"])):
+            if any(p in n + " " for p in pats):
+                return key
+        return None
+    return BENCH_FOR_SUB.get(sub_category)
+
+
+async def load_benchmarks(session, all_funds):
+    """Pick, for each benchmark, the Direct-Growth index fund with the longest history."""
+    out = {}
+    for key, pats in BENCH_MATCH.items():
+        cands = []
+        for f in all_funds:
+            nm = f["schemeName"].upper()
+            if all(p in nm for p in pats) and "DIRECT" in nm and "GROWTH" in nm \
+                    and not any(x in nm for x in BENCH_SKIP):
+                cands.append(f)
+        best = None
+        for f in cands[:6]:
+            d = await fetch_json(session, f"{MFAPI_BASE}/{f['schemeCode']}", retries=3, timeout=20)
+            nav = (d or {}).get("data") or []
+            if len(nav) > 500 and (best is None or len(nav) > len(best[2])):
+                best = (f["schemeCode"], f["schemeName"], nav)
+        if best:
+            log.info("Benchmark %s -> %s (%s, %d NAVs)", BENCH_LABEL[key], best[1], best[0], len(best[2]))
+            out[key] = best[2]
+        else:
+            log.warning("Benchmark %s: no usable index fund found (%d candidates)", BENCH_LABEL[key], len(cands))
+    return out
 
 
 async def d1_exec(session, sql, params=None):
@@ -114,11 +168,13 @@ async def ensure_metric_columns(session):
 
 async def d1_upsert(session, row):
     m = row.get("metrics") or {}
+    rel = row.get("relative") or {}
     await d1_exec(session, """INSERT INTO mf_cache
             (scheme_code,fund_name,category,sub_category,amc_name,
              latest_nav,nav_date,return_1y,return_3y,return_5y,
-             m_sharpe,m_sortino,m_maxdd,m_vol,m_consistency,m_days,last_synced)
-          VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,datetime('now'))
+             m_sharpe,m_sortino,m_maxdd,m_vol,m_consistency,m_days,
+             m_alpha,m_beta,m_r2,m_upcap,m_downcap,m_info,m_te,m_bench,last_synced)
+          VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,datetime('now'))
           ON CONFLICT(scheme_code) DO UPDATE SET
             fund_name=excluded.fund_name, category=excluded.category,
             sub_category=excluded.sub_category, amc_name=excluded.amc_name,
@@ -128,12 +184,18 @@ async def d1_upsert(session, row):
             m_sharpe=excluded.m_sharpe, m_sortino=excluded.m_sortino,
             m_maxdd=excluded.m_maxdd, m_vol=excluded.m_vol,
             m_consistency=excluded.m_consistency, m_days=excluded.m_days,
+            m_alpha=excluded.m_alpha, m_beta=excluded.m_beta, m_r2=excluded.m_r2,
+            m_upcap=excluded.m_upcap, m_downcap=excluded.m_downcap,
+            m_info=excluded.m_info, m_te=excluded.m_te, m_bench=excluded.m_bench,
             last_synced=excluded.last_synced""",
         [row["scheme_code"], row["fund_name"], row["category"],
          row["sub_category"], row["amc_name"], row["latest_nav"],
          row["nav_date"], row["return_1y"], row["return_3y"], row["return_5y"],
          m.get("sharpe_ratio"), m.get("sortino_ratio"), m.get("max_drawdown"),
-         m.get("std_dev"), m.get("consistency_pct"), m.get("metrics_days")])
+         m.get("std_dev"), m.get("consistency_pct"), m.get("metrics_days"),
+         rel.get("alpha"), rel.get("beta"), rel.get("r2"), rel.get("upside_capture"),
+         rel.get("downside_capture"), rel.get("info_ratio"), rel.get("tracking_error"),
+         row.get("bench_label") if rel else None])
 
 
 def calc_cagr(nav_data, years):
@@ -182,7 +244,7 @@ def extract_amc(name):
     return name.split()[0] if name else "Unknown"
 
 
-async def fetch_and_store(session, scheme_code, fund_name, semaphore):
+async def fetch_and_store(session, scheme_code, fund_name, semaphore, benchmarks=None):
     async with semaphore:
         cat, sub = infer_category(fund_name)
         if cat not in TARGET_CATEGORIES:
@@ -220,6 +282,10 @@ async def fetch_and_store(session, scheme_code, fund_name, semaphore):
                 "return_5y":    calc_cagr(nav_data, 5),
                 "metrics":      compute_metrics(nav_data),
             }
+            bkey = benchmark_key(sub, fund_name)
+            if bkey and benchmarks and bkey in benchmarks:
+                row["relative"] = compute_relative(nav_data, benchmarks[bkey])
+                row["bench_label"] = BENCH_LABEL[bkey]
             await d1_upsert(session, row)
             return True
         except Exception as e:
@@ -246,8 +312,9 @@ async def main():
                   if infer_category(f["schemeName"])[0] in TARGET_CATEGORIES][:MAX_FUNDS]
         log.info(f"Processing {len(target)} equity/hybrid funds with {CONCURRENCY} parallel workers")
 
+        benchmarks = await load_benchmarks(session, all_funds)
         semaphore = asyncio.Semaphore(CONCURRENCY)
-        tasks     = [fetch_and_store(session, code, name, semaphore) for code, name in target]
+        tasks     = [fetch_and_store(session, code, name, semaphore, benchmarks) for code, name in target]
 
         synced = 0
         errors = 0

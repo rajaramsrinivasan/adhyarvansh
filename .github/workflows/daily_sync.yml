@@ -43,7 +43,7 @@ jobs:
           SKIP_TIER2:        "true"
           # Scoring engine used for the live signal: "1" (returns only) or "2"
           # (adds Sharpe, Sortino, drawdown, consistency). Both are always stored
-          # side by side. Set the repo variable ENGINE_VERSION to 2 to go live.
+          # side by side. Set the repo variable ENGINE_VERSION to 2 or 3 to go live.
           ENGINE_VERSION:    ${{ vars.ENGINE_VERSION || '1' }}
           # Optional overrides (defaults shown):
           # VERDICT_STALE_DAYS: "14"
