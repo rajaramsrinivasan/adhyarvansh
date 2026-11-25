@@ -364,6 +364,14 @@ def composite_score_other(fund: dict, base: dict) -> dict:
     return {**out, "score": score, "layers": layers}
 
 
+def nav_age_days(nav_date):
+    """Days since the fund's last NAV (dd-mm-yyyy); None if missing or unreadable."""
+    try:
+        return (datetime.now() - datetime.strptime(nav_date, "%d-%m-%Y")).days
+    except Exception:
+        return None
+
+
 def _f(x, d=1):
     return f"{x:.{d}f}"
 
@@ -581,7 +589,7 @@ async def run_tier1(session):
                 raise
     rows = await d1_query(session,
         "SELECT scheme_code, fund_name, category, sub_category, amc_name, "
-        "       latest_nav, return_1y, return_3y, return_5y, "
+        "       latest_nav, nav_date, return_1y, return_3y, return_5y, "
         "       m_sharpe, m_sortino, m_maxdd, m_vol, m_consistency, m_days, "
         "       m_alpha, m_beta, m_r2, m_upcap, m_downcap, m_info, m_te, m_bench "
         "FROM mf_cache "
@@ -642,10 +650,17 @@ async def run_tier1(session):
                     sc["signal"]          = sc3["signal"]
                     sc["signal_layers"]   = json.dumps(sc3["layers"])
 
-                tagline = make_tagline(
-                    {**fund, "risk_label": sc["risk_label"]}, sc["signal"], peer,
-                    use_metrics=(ENGINE_VERSION in ("2", "3")) or not equity_like,
-                    use_rel=(ENGINE_VERSION == "3") and equity_like)
+                age = nav_age_days(fund.get("nav_date"))
+                if age is None or age > 90:
+                    # No NAV for 90+ days: the fund is dormant, closed or unreadable.
+                    sc["signal"] = "NOT RATED"
+                    tagline = ("No NAV update since " + fund["nav_date"] + ", so it is not rated.") \
+                        if fund.get("nav_date") else "No recent NAV on record, so it is not rated."
+                else:
+                    tagline = make_tagline(
+                        {**fund, "risk_label": sc["risk_label"]}, sc["signal"], peer,
+                        use_metrics=(ENGINE_VERSION in ("2", "3")) or not equity_like,
+                        use_rel=(ENGINE_VERSION == "3") and equity_like)
                 await d1_run(session,
                     """INSERT INTO ai_recommendations
                          (scheme_code, composite_score, signal, risk_score, risk_label,
