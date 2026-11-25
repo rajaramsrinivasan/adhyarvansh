@@ -116,3 +116,57 @@ def compute_metrics(nav_data):
         "consistency_pct": consistency,
         "metrics_days":    len(s),
     }
+
+
+# ── Phase 2: metrics relative to a benchmark ─────────────────────────────────
+def compute_relative(nav_data, bench_nav):
+    """
+    Compare a fund with its benchmark (an index-fund NAV series, same mfapi format).
+    Uses daily returns on dates both series share, over the last 3 years.
+    Returns None with under ~1 year of overlap. Keys:
+      alpha          Jensen's alpha, % a year
+      beta           sensitivity to the benchmark (1.0 = moves with it)
+      r2             how much of the fund's moves the benchmark explains (0-1)
+      upside_capture / downside_capture   % of the benchmark's up / down days captured
+      tracking_error % a year, std-dev of (fund - benchmark) daily returns
+      info_ratio     excess return per unit of tracking error
+    """
+    f = dict(_window(_series(nav_data), 3))
+    b = dict(_window(_series(bench_nav), 3))
+    dates = sorted(set(f) & set(b))
+    if len(dates) < MIN_POINTS:
+        return None
+    fr, br = [], []
+    for i in range(1, len(dates)):
+        a, c = f[dates[i]] / f[dates[i - 1]] - 1, b[dates[i]] / b[dates[i - 1]] - 1
+        if abs(a) <= GLITCH_MOVE and abs(c) <= GLITCH_MOVE:
+            fr.append(a)
+            br.append(c)
+    n = len(fr)
+    if n < MIN_POINTS - 5:
+        return None
+    mf, mb = sum(fr) / n, sum(br) / n
+    vb = sum((x - mb) ** 2 for x in br) / (n - 1)
+    vf = sum((x - mf) ** 2 for x in fr) / (n - 1)
+    cov = sum((x - mf) * (y - mb) for x, y in zip(fr, br)) / (n - 1)
+    if vb <= 0 or vf <= 0:
+        return None
+    beta = cov / vb
+    r2 = cov * cov / (vb * vf)
+    rf_d = (1 + RF / 100) ** (1 / TRADING_DAYS) - 1
+    alpha = ((mf - rf_d) - beta * (mb - rf_d)) * TRADING_DAYS * 100
+
+    up = [(x, y) for x, y in zip(fr, br) if y > 0]
+    dn = [(x, y) for x, y in zip(fr, br) if y < 0]
+    upcap = (sum(x for x, _ in up) / sum(y for _, y in up) * 100) if up else None
+    dncap = (sum(x for x, _ in dn) / sum(y for _, y in dn) * 100) if dn else None
+
+    ex = [x - y for x, y in zip(fr, br)]
+    me = sum(ex) / n
+    te = math.sqrt(sum((e - me) ** 2 for e in ex) / (n - 1)) * math.sqrt(TRADING_DAYS) * 100
+    ir = (me * TRADING_DAYS * 100) / te if te > 0.01 else 0.0
+
+    def r(x, d=2):
+        return None if x is None else round(x, d)
+    return {"alpha": r(alpha), "beta": r(beta), "r2": r(r2), "upside_capture": r(upcap, 1),
+            "downside_capture": r(dncap, 1), "tracking_error": r(te), "info_ratio": r(ir)}
