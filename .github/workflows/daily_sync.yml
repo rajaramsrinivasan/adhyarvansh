@@ -11,7 +11,7 @@ permissions:
 jobs:
   daily-run:
     runs-on: ubuntu-latest
-    timeout-minutes: 45    # was 120 — async sync finishes in ~15 mins
+    timeout-minutes: 150   # all active schemes (~15-20k) instead of equity/hybrid only
 
     steps:
       - uses: actions/checkout@v4

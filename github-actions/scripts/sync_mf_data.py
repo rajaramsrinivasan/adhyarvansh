@@ -24,8 +24,14 @@ D1_DATABASE_ID = os.environ["D1_DATABASE_ID"]
 D1_URL     = f"https://api.cloudflare.com/client/v4/accounts/{CF_ACCOUNT_ID}/d1/database/{D1_DATABASE_ID}/query"
 MFAPI_BASE = "https://api.mfapi.in/mf"
 
-TARGET_CATEGORIES = {"Equity", "Hybrid"}
-MAX_FUNDS   = 6000
+# Every active scheme on mfapi.in is stored. Scoring (ai_analysis.py) still covers
+# only Equity and Hybrid, because its rules are built for those.
+MAX_FUNDS   = 60000
+
+# Names that mark a scheme as closed / matured (fixed-term plans, wound-up series).
+# These never get a fresh NAV, so fetching them only wastes time.
+CLOSED_MARKERS = ("FIXED TERM", "FIXED MATURITY", "FMP", "INTERVAL", "CAPITAL PROTECTION",
+                  "SEGREGATED", "SERIES ", "DUAL ADVANTAGE", "FIXED HORIZON", "FTP ")
 CONCURRENCY = 40
 
 # mfapi.in sometimes serves an HTML throttle/error page to the default aiohttp
@@ -247,8 +253,6 @@ def extract_amc(name):
 async def fetch_and_store(session, scheme_code, fund_name, semaphore, benchmarks=None):
     async with semaphore:
         cat, sub = infer_category(fund_name)
-        if cat not in TARGET_CATEGORIES:
-            return False
 
         url = f"{MFAPI_BASE}/{scheme_code}"
         # fetch_json already retries internally; one call is enough.
@@ -305,12 +309,13 @@ async def main():
         if not all_funds:
             log.error("Could not load MF scheme list from mfapi.in after retries — aborting.")
             raise SystemExit(1)
-        log.info(f"Total funds: {len(all_funds)} — filtering to equity/hybrid...")
+        log.info(f"Total funds: {len(all_funds)} — dropping closed series...")
 
         # Pre-filter by name to avoid fetching unwanted funds
         target = [(f["schemeCode"], f["schemeName"]) for f in all_funds
-                  if infer_category(f["schemeName"])[0] in TARGET_CATEGORIES][:MAX_FUNDS]
-        log.info(f"Processing {len(target)} equity/hybrid funds with {CONCURRENCY} parallel workers")
+                  if not any(m in f["schemeName"].upper() for m in CLOSED_MARKERS)][:MAX_FUNDS]
+        log.info(f"Skipped {len(all_funds) - len(target)} closed/matured series by name")
+        log.info(f"Processing {len(target)} funds with {CONCURRENCY} parallel workers")
 
         benchmarks = await load_benchmarks(session, all_funds)
         semaphore = asyncio.Semaphore(CONCURRENCY)
