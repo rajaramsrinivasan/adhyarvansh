@@ -22,7 +22,7 @@ GitHub Secrets needed (same as sync_mf_data.py):
   CF_ACCOUNT_ID, CF_API_TOKEN, D1_DATABASE_ID, ANTHROPIC_API_KEY
 
 Optional env vars:
-  MAX_FUNDS         (default 2000) — cap Tier 1 fund count
+  MAX_FUNDS         (default 100000) — cap Tier 1 fund count
   VERDICT_STALE_DAYS (default 14)  — days before a verdict is refreshed
   BATCH_SIZE        (default 15)   — funds per Claude call
   MODEL             (default claude-sonnet-4-20250514)
@@ -41,7 +41,7 @@ CF_API_TOKEN      = os.environ["CF_API_TOKEN"]
 D1_DATABASE_ID    = os.environ["D1_DATABASE_ID"]
 ANTHROPIC_API_KEY = os.environ["ANTHROPIC_API_KEY"]
 
-MAX_FUNDS          = int(os.environ.get("MAX_FUNDS",          "2000"))
+MAX_FUNDS          = int(os.environ.get("MAX_FUNDS",          "100000"))
 VERDICT_STALE_DAYS = int(os.environ.get("VERDICT_STALE_DAYS", "14"))
 BATCH_SIZE         = int(os.environ.get("BATCH_SIZE",         "15"))
 MODEL              = os.environ.get("MODEL", "claude-sonnet-4-20250514")

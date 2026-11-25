@@ -34,6 +34,24 @@ CLOSED_MARKERS = ("FIXED TERM", "FIXED MATURITY", "FMP", "INTERVAL", "CAPITAL PR
                   "SEGREGATED", "SERIES ", "DUAL ADVANTAGE", "FIXED HORIZON", "FTP ")
 CONCURRENCY = 40
 
+# mfapi.in allows 300 requests a minute per IP (it answers HTTP 429 beyond that), and
+# GitHub runners share IPs with other jobs, so stay well under it. ~14k active
+# schemes at 240/min is about an hour.
+RATE_PER_MIN = int(os.environ.get("MFAPI_RATE_PER_MIN", "240"))
+_RATE_GAP = 60.0 / RATE_PER_MIN
+_next_slot = 0.0
+
+
+async def _throttle():
+    """Hand out request slots one every _RATE_GAP seconds across all workers."""
+    global _next_slot
+    loop = asyncio.get_running_loop()
+    now = loop.time()
+    slot = max(now, _next_slot)
+    _next_slot = slot + _RATE_GAP
+    if slot > now:
+        await asyncio.sleep(slot - now)
+
 # mfapi.in sometimes serves an HTML throttle/error page to the default aiohttp
 # User-Agent. Sending a normal UA + Accept header makes responses reliably JSON.
 MFAPI_HEADERS = {
@@ -62,6 +80,7 @@ async def fetch_json(session, url, *, retries=4, base_delay=1.5, timeout=25, hea
     last_err = None
     for attempt in range(1, retries + 1):
         try:
+            await _throttle()
             async with session.get(
                 url, headers=hdrs,
                 timeout=aiohttp.ClientTimeout(total=timeout),
@@ -84,7 +103,10 @@ async def fetch_json(session, url, *, retries=4, base_delay=1.5, timeout=25, hea
         except (aiohttp.ClientError, asyncio.TimeoutError) as e:
             last_err = str(e)
             if attempt < retries:
-                delay = base_delay * (2 ** (attempt - 1))   # 1.5, 3, 6, 12s
+                if "HTTP 429" in last_err:
+                    delay = 20 + 10 * attempt                # rate limited: wait it out
+                else:
+                    delay = base_delay * (2 ** (attempt - 1))   # 1.5, 3, 6, 12s
                 await asyncio.sleep(delay)
             else:
                 log.warning("fetch_json gave up after %d tries for %s: %s",
@@ -224,21 +246,34 @@ def calc_cagr(nav_data, years):
 
 def infer_category(name):
     n = name.upper()
-    if any(x in n for x in ["LIQUID","OVERNIGHT","MONEY MARKET","ULTRA SHORT"]): return "Debt","Liquid"
+    if any(x in n for x in ["LIQUID","OVERNIGHT","MONEY MARKET","ULTRA SHORT","CASH FUND","TREASURY"]): return "Debt","Liquid"
     if any(x in n for x in ["GILT","G-SEC"]): return "Debt","Gilt"
-    if any(x in n for x in ["DEBT","BOND","INCOME","CREDIT RISK","SHORT TERM","MEDIUM TERM"]): return "Debt","Debt"
+    if any(x in n for x in ["DEBT","BOND","INCOME","CREDIT RISK","SHORT TERM","MEDIUM TERM","LOW DURATION",
+                            "DURATION","FLOATING","FLOATER","BANKING & PSU","BANKING AND PSU","SDL",
+                            "TARGET MATURITY","ROLLING","CORPORATE BOND"]): return "Debt","Debt"
     if "ARBITRAGE" in n: return "Hybrid","Arbitrage"
     if any(x in n for x in ["BALANCED ADVANTAGE","DYNAMIC ASSET"]): return "Hybrid","Balanced Advantage"
     if any(x in n for x in ["HYBRID","BALANCED","EQUITY SAVINGS","MULTI ASSET"]): return "Hybrid","Hybrid"
+    # gold / silver funds; miners are equity, not the metal
+    if any(x in n for x in ["GOLD","SILVER"]):
+        return ("Equity","Thematic") if "MINING" in n else ("Other","Commodity")
     if any(x in n for x in ["INDEX","NIFTY","SENSEX"]): return "Equity","Index"
     if any(x in n for x in ["ELSS","TAX SAVER","TAX SAVING"]): return "Equity","ELSS"
     if any(x in n for x in ["SMALL CAP","SMALLCAP"]): return "Equity","Small Cap"
     if any(x in n for x in ["MID CAP","MIDCAP"]): return "Equity","Mid Cap"
     if any(x in n for x in ["LARGE CAP","LARGECAP","BLUECHIP","TOP 100"]): return "Equity","Large Cap"
     if any(x in n for x in ["FLEXI CAP","FLEXICAP","MULTI CAP","MULTICAP"]): return "Equity","Flexi Cap"
+    # sector, theme and overseas equity funds that do not say "equity" in the name
+    if any(x in n for x in ["PHARMA","HEALTHCARE","HEALTH CARE","BANKING","FINANCIAL SERVICES","TECHNOLOGY",
+                            "DIGITAL","INFRASTRUCTURE","INFRA ","CONSUMPTION","ENERGY","MANUFACTURING",
+                            "AUTOMOBILE","FMCG","PSU","DIVIDEND YIELD","FOCUSED","CONTRA","VALUE",
+                            "OPPORTUNITIES","ESG","MOMENTUM","QUALITY","LOW VOLATILITY","ALPHA","NASDAQ",
+                            "S&P 500","TAIWAN","OVERSEAS","GLOBAL","INTERNATIONAL","CHINA","JAPAN","EUROPE",
+                            "US ","INNOVATION","DEFENCE","REALTY","MNC","CAPITAL MARKET","COMMODITIES",
+                            "TRANSPORTATION","SERVICES","BUSINESS CYCLE","STRATEGY","SPECIAL SITUATIONS"]):
+        return "Equity","Thematic"
     if "EQUITY" in n or "GROWTH" in n: return "Equity","Equity"
-    if any(x in n for x in ["GOLD","SILVER"]): return "Other","Commodity"
-    return "Debt","Other"
+    return "Other","Other"
 
 
 def extract_amc(name):
@@ -256,7 +291,7 @@ async def fetch_and_store(session, scheme_code, fund_name, semaphore, benchmarks
 
         url = f"{MFAPI_BASE}/{scheme_code}"
         # fetch_json already retries internally; one call is enough.
-        data = await fetch_json(session, url, retries=3, timeout=20)
+        data = await fetch_json(session, url, retries=6, timeout=30)
         if not data:
             return False
         nav_data = data.get("data", [])
@@ -314,6 +349,13 @@ async def main():
         # Pre-filter by name to avoid fetching unwanted funds
         target = [(f["schemeCode"], f["schemeName"]) for f in all_funds
                   if not any(m in f["schemeName"].upper() for m in CLOSED_MARKERS)][:MAX_FUNDS]
+        # If a run is cut short, the funds people actually use should already be in:
+        # Direct-Growth first, then other Direct, then Regular-Growth, then the rest.
+        def _prio(item):
+            n = item[1].upper()
+            direct, growth = "DIRECT" in n, "GROWTH" in n and "IDCW" not in n and "DIVIDEND" not in n
+            return 0 if direct and growth else 1 if direct else 2 if growth else 3
+        target.sort(key=_prio)
         log.info(f"Skipped {len(all_funds) - len(target)} closed/matured series by name")
         log.info(f"Processing {len(target)} funds with {CONCURRENCY} parallel workers")
 
