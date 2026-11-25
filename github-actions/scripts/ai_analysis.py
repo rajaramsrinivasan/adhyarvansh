@@ -289,6 +289,164 @@ def composite_score_v2(fund: dict, v1: dict) -> dict:
     return {"score": score, "signal": signal_for(score), "layers": layers}
 
 
+SCORED_BY_EQUITY_RULES = ("Equity", "Hybrid")
+
+
+def composite_score_other(fund: dict, base: dict) -> dict:
+    """
+    Score for funds the equity rules do not fit: liquid, debt, gilt and gold/silver.
+    `base` is the equity-rule result, reused only for the expected-return ranges.
+    Debt-like funds are judged on yield against the 6.5% risk-free rate, on how
+    little they fall, and on how steady the ride is. Unclassified funds keep the
+    generic score and say so.
+    """
+    sub = (fund.get("sub_category") or "")
+    r1, r3, r5 = fund.get("return_1y"), fund.get("return_3y"), fund.get("return_5y")
+    mdd, cons, vol = fund.get("m_maxdd"), fund.get("m_consistency"), fund.get("m_vol")
+    sharpe = fund.get("m_sharpe")
+    out = dict(base)
+    layers = []
+    score = 50.0
+
+    if sub == "Liquid":
+        out["risk_score"], out["risk_label"] = 1.0, "Very Low"
+        if r1 is not None:
+            if r1 >= 7.0:   score += 15; layers.append("yield>=7%")
+            elif r1 >= 6.5: score += 8;  layers.append("yield>=6.5%")
+            elif r1 < 5.5:  score -= 12; layers.append("yield<5.5%")
+        if r3 is not None and r3 >= 6.0: score += 6; layers.append("3Y steady")
+        if vol is not None and vol > 1.0:  score -= 8;  layers.append("unusual swings")
+        if mdd is not None and mdd < -1.0: score -= 10; layers.append("fell>1%")
+        elif mdd is not None:              score += 6;  layers.append("no real falls")
+    elif sub in ("Debt", "Gilt"):
+        gilt = sub == "Gilt"
+        out["risk_score"], out["risk_label"] = (4.0, "Moderate") if gilt else (3.0, "Low")
+        if r3 is not None:
+            if r3 >= 8:    score += 14; layers.append("3Y>=8%")
+            elif r3 >= 7:  score += 8;  layers.append("3Y>=7%")
+            elif r3 < 6:   score -= 10; layers.append("3Y<6%")
+        if r1 is not None:
+            if r1 >= 8:    score += 6;  layers.append("1Y>=8%")
+            elif r1 < 5:   score -= 8;  layers.append("1Y<5%")
+        if r5 is not None and r5 >= 7.5: score += 6; layers.append("5Y>=7.5%")
+        if mdd is not None:
+            lo, hi = (4, 10) if gilt else (2, 6)
+            if abs(mdd) <= lo:   score += 8;  layers.append("small fall")
+            elif abs(mdd) >= hi: score -= 10; layers.append("deep fall")
+        if cons is not None:
+            if cons >= 80: score += 6; layers.append("consistency>=80%")
+            elif cons < 50: score -= 6; layers.append("consistency<50%")
+        if sharpe is not None:
+            if sharpe > 1.0:  score += 5; layers.append("Sharpe>1")
+            elif sharpe < 0:  score -= 5; layers.append("Sharpe<0")
+    elif sub == "Commodity":
+        out["risk_score"], out["risk_label"] = 7.0, "High"
+        if r5 is not None:
+            if r5 > 12:   score += 12; layers.append("5Y>12%")
+            elif r5 < 5:  score -= 10; layers.append("5Y<5%")
+        if r3 is not None:
+            if r3 > 14:   score += 8;  layers.append("3Y>14%")
+            elif r3 < 5:  score -= 8;  layers.append("3Y<5%")
+        if r1 is not None and r1 < 0: score -= 10; layers.append("1Y<0%")
+        if mdd is not None and abs(mdd) >= 25: score -= 6; layers.append("deep fall")
+        if sharpe is not None:
+            if sharpe > 1.0:  score += 6; layers.append("Sharpe>1")
+            elif sharpe < 0.3: score -= 6; layers.append("Sharpe<0.3")
+    else:
+        # unclassified: keep the generic rules and flag it
+        return {**base, "score": base["composite_score"], "signal": signal_for(base["composite_score"]),
+                "layers": (json.loads(base["signal_layers"]) if base.get("signal_layers") else []) + ["category unclear"]}
+
+    score = max(0.0, min(100.0, round(score, 1)))
+    out["composite_score"] = score
+    out["signal"] = signal_for(score)
+    out["signal_layers"] = json.dumps(layers)
+    return {**out, "score": score, "layers": layers}
+
+
+def _f(x, d=1):
+    return f"{x:.{d}f}"
+
+
+def make_tagline(fund: dict, signal: str, peer, use_metrics: bool, use_rel: bool) -> str:
+    """
+    One short line that says why the fund got its rating, built from its own
+    numbers (no AI call). Leads with what drives the signal, adds the main caveat.
+    """
+    sub = fund.get("sub_category") or ""
+    cat = fund.get("category") or ""
+    r1, r3, r5 = fund.get("return_1y"), fund.get("return_3y"), fund.get("return_5y")
+    pos, neg = [], []
+    yield_like = sub in ("Liquid", "Debt", "Gilt") or cat == "Debt"
+
+    if r1 is None and r3 is None and r5 is None:
+        return "Too new to rate fully; not enough return history yet."
+
+    # returns
+    if r5 is not None:
+        if r5 >= (7.5 if yield_like else 15): pos.append((3, f"{_f(r5)}% a year over 5 years"))
+        elif r5 < 5 and not sub == "Liquid":  neg.append((3, f"weak 5-year return ({_f(r5)}%)"))
+    elif r3 is not None:
+        if r3 >= (7.5 if yield_like else 15): pos.append((3, f"{_f(r3)}% a year over 3 years"))
+        elif r3 < 5 and not sub == "Liquid":  neg.append((3, f"weak 3-year return ({_f(r3)}%)"))
+    if sub == "Liquid" and r1 is not None:
+        if r1 >= 6.5: pos.append((3, f"yield of {_f(r1)}% beats cash"))
+        elif r1 < 5.5: neg.append((4, f"yield of {_f(r1)}% is low for a liquid fund"))
+    if r1 is not None:
+        if r1 < 0:   neg.append((5, "lost money in the last year"))
+        elif r1 < 4 and not sub == "Liquid": neg.append((2, f"slow last year ({_f(r1)}%)"))
+
+    if use_metrics:
+        mdd, cons, sharpe = fund.get("m_maxdd"), fund.get("m_consistency"), fund.get("m_sharpe")
+        typ = TYPICAL_DRAWDOWN.get(fund.get("risk_label"), 22)
+        if sharpe is not None and fund.get("m_days"):
+            if sharpe > 1.2:  pos.append((4, "strong return for the risk taken"))
+            elif sharpe < 0.8 and not yield_like: neg.append((4, "return does not justify the risk"))
+        if mdd is not None:
+            if abs(mdd) <= typ * 0.8 and not yield_like: pos.append((2, "holds up well in falls"))
+            elif abs(mdd) >= typ * 1.25 and not yield_like: neg.append((4, f"fell {_f(abs(mdd), 0)}% at its worst"))
+            elif yield_like and abs(mdd) >= (6 if sub != "Gilt" else 10): neg.append((4, f"fell {_f(abs(mdd), 0)}% at its worst, high for debt"))
+            elif yield_like and abs(mdd) <= 2: pos.append((3, "very stable, small falls"))
+        if cons is not None:
+            if cons >= 75:  pos.append((3, f"beat cash in {_f(cons, 0)}% of rolling years"))
+            elif cons < 45: neg.append((3, f"beat cash in only {_f(cons, 0)}% of rolling years"))
+
+    if use_rel and fund.get("sub_category") == "Index":
+        te = fund.get("m_te")
+        if te is not None and te < 0.5:   pos.insert(0, (6, f"tracks its index within {_f(te, 2)}% a year"))
+        elif te is not None and te > 1.0: neg.append((6, f"drifts {_f(te)}% a year from its index"))
+    elif use_rel and fund.get("m_alpha") is not None and (fund.get("m_r2") or 0) >= 0.6:
+        a, b = fund["m_alpha"], fund.get("m_bench") or "its benchmark"
+        if a > 2:   pos.append((5, f"beats {b} by {_f(a)}% a year"))
+        elif a < 0: neg.append((5, f"trails {b}"))
+        up, dn = fund.get("m_upcap"), fund.get("m_downcap")
+        if up is not None and dn is not None and up > 100 and dn < 90:
+            pos.append((5, "gains more than it loses against the market"))
+        elif dn is not None and dn > 110:
+            neg.append((4, "falls harder than the market"))
+    if use_rel and peer and sub:
+        if peer["q"] == 1:   pos.append((4, f"top quarter of {sub} funds"))
+        elif peer["q"] == 4: neg.append((4, f"bottom quarter of {sub} funds"))
+
+    pos.sort(key=lambda t: -t[0])
+    neg.sort(key=lambda t: -t[0])
+    P = [t for _, t in pos[:2]]
+    N = [t for _, t in neg[:1]]
+    if not P and not N:
+        ref = next(((v, y) for v, y in ((r5, "5"), (r3, "3"), (r1, "1")) if v is not None), None)
+        P = [f"{_f(ref[0])}% a year over {ref[1]} year{'s' if ref[1] != '1' else ''}, nothing that stands out"] if ref else []
+    good = signal in ("STRONG BUY", "BUY")
+    if good:
+        line = " and ".join(P) if P else "steady, middle-of-the-road numbers"
+        if N: line += f", but {N[0]}"
+    elif signal == "HOLD":
+        line = (P[0] if P else "mixed record") + (f", but {N[0]}" if N else "")
+    else:
+        line = (N[0] if N else "weak overall record") + (f", despite {P[0]}" if P else "")
+    line = line[0].upper() + line[1:]
+    return (line[:117] + "…" if len(line) > 118 else line) + ("" if line.endswith("…") else ".")
+
+
 def peer_quartiles(rows):
     """
     Rank each fund against others in its sub-category (3-year return and Sharpe,
@@ -411,6 +569,7 @@ async def run_tier1(session):
                           ("ai_recommendations", "signal_v3", "TEXT"),
                           ("ai_recommendations", "layers_v3", "TEXT"),
                           ("ai_recommendations", "peer_quartile", "INTEGER"),
+                          ("ai_recommendations", "tagline", "TEXT"),
                           ("mf_cache", "m_alpha", "REAL"), ("mf_cache", "m_beta", "REAL"),
                           ("mf_cache", "m_r2", "REAL"), ("mf_cache", "m_upcap", "REAL"),
                           ("mf_cache", "m_downcap", "REAL"), ("mf_cache", "m_info", "REAL"),
@@ -426,7 +585,6 @@ async def run_tier1(session):
         "       m_sharpe, m_sortino, m_maxdd, m_vol, m_consistency, m_days, "
         "       m_alpha, m_beta, m_r2, m_upcap, m_downcap, m_info, m_te, m_bench "
         "FROM mf_cache "
-        "WHERE category IN ('Equity','Hybrid') "
         f"LIMIT {MAX_FUNDS}"
     )
     log.info("Tier 1: %d funds loaded", len(rows))
@@ -436,91 +594,122 @@ async def run_tier1(session):
     moves23 = Counter()
     with_metrics = 0
     with_bench = 0
-    peers = peer_quartiles(rows)
-    upserted = 0
-    errors   = 0
-    for fund in rows:
-        try:
-            sc  = composite_score(fund)
-            sc2 = composite_score_v2(fund, sc)
-            peer = peers.get(fund["scheme_code"])
-            sc3 = composite_score_v3(fund, sc2, peer)
-            moves[(sc["signal"], sc2["signal"])] += 1
-            moves23[(sc2["signal"], sc3["signal"])] += 1
-            if fund.get("m_alpha") is not None or fund.get("m_te") is not None:
-                with_bench += 1
+    kinds = Counter()
+    peers = peer_quartiles([f for f in rows if f.get("category") in SCORED_BY_EQUITY_RULES])
+    counts = {"ok": 0, "err": 0}
+    sem = asyncio.Semaphore(15)
 
-            # Real NAV-based risk numbers replace the rough proxies when we have them
-            if fund.get("m_days") is not None and fund.get("m_sharpe") is not None:
-                with_metrics += 1
-                sc["sharpe_ratio"]    = fund["m_sharpe"]
-                sc["sortino_ratio"]   = fund["m_sortino"]
-                sc["max_drawdown"]    = fund["m_maxdd"]
-                sc["std_dev"]         = fund["m_vol"]
-                sc["consistency_pct"] = fund["m_consistency"] or 0.0
+    async def score_one(fund):
+        nonlocal with_metrics, with_bench
+        async with sem:
+            try:
+                sc  = composite_score(fund)
+                v1_signal = sc["signal"]
+                equity_like = fund.get("category") in SCORED_BY_EQUITY_RULES
+                peer = peers.get(fund["scheme_code"]) if equity_like else None
+                if equity_like:
+                    sc2 = composite_score_v2(fund, sc)
+                    sc3 = composite_score_v3(fund, sc2, peer)
+                    kinds["equity/hybrid"] += 1
+                else:
+                    other = composite_score_other(fund, sc)
+                    sc.update({k: v for k, v in other.items() if k not in ("score", "layers")})
+                    sc2 = sc3 = {"score": other["score"], "signal": signal_for(other["score"]),
+                                 "layers": other["layers"]}
+                    kinds["other"] += 1
+                if equity_like:
+                    moves[(v1_signal, sc2["signal"])] += 1
+                    moves23[(sc2["signal"], sc3["signal"])] += 1
+                if fund.get("m_alpha") is not None or fund.get("m_te") is not None:
+                    with_bench += 1
 
-            if ENGINE_VERSION in ("2", "3"):
-                live = sc3 if ENGINE_VERSION == "3" else sc2
-                sc["composite_score"] = live["score"]
-                sc["signal"]          = live["signal"]
-                sc["signal_layers"]   = json.dumps(live["layers"])
+                # Real NAV-based risk numbers replace the rough proxies when we have them
+                if fund.get("m_days") is not None and fund.get("m_sharpe") is not None:
+                    with_metrics += 1
+                    sc["sharpe_ratio"]    = fund["m_sharpe"]
+                    sc["sortino_ratio"]   = fund["m_sortino"]
+                    sc["max_drawdown"]    = fund["m_maxdd"]
+                    sc["std_dev"]         = fund["m_vol"]
+                    sc["consistency_pct"] = fund["m_consistency"] or 0.0
 
-            await d1_run(session,
-                """INSERT INTO ai_recommendations
-                     (scheme_code, composite_score, signal, risk_score, risk_label,
-                      sharpe_ratio, sortino_ratio, max_drawdown, std_dev,
-                      consistency_pct, signal_layers,
-                      expected_1y_min, expected_1y_max,
-                      expected_3y_min, expected_3y_max,
-                      expected_5y_min, expected_5y_max,
-                      composite_score_v2, signal_v2, layers_v2,
-                      composite_score_v3, signal_v3, layers_v3, peer_quartile,
-                      generated_at)
-                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,datetime('now'))
-                   ON CONFLICT(scheme_code) DO UPDATE SET
-                     composite_score=excluded.composite_score,
-                     signal=excluded.signal,
-                     risk_score=excluded.risk_score,
-                     risk_label=excluded.risk_label,
-                     sharpe_ratio=excluded.sharpe_ratio,
-                     sortino_ratio=excluded.sortino_ratio,
-                     max_drawdown=excluded.max_drawdown,
-                     std_dev=excluded.std_dev,
-                     consistency_pct=excluded.consistency_pct,
-                     signal_layers=excluded.signal_layers,
-                     expected_1y_min=excluded.expected_1y_min,
-                     expected_1y_max=excluded.expected_1y_max,
-                     expected_3y_min=excluded.expected_3y_min,
-                     expected_3y_max=excluded.expected_3y_max,
-                     expected_5y_min=excluded.expected_5y_min,
-                     expected_5y_max=excluded.expected_5y_max,
-                     composite_score_v2=excluded.composite_score_v2,
-                     signal_v2=excluded.signal_v2,
-                     layers_v2=excluded.layers_v2,
-                     composite_score_v3=excluded.composite_score_v3,
-                     signal_v3=excluded.signal_v3,
-                     layers_v3=excluded.layers_v3,
-                     peer_quartile=excluded.peer_quartile,
-                     generated_at=excluded.generated_at""",
-                [
-                    fund["scheme_code"],
-                    sc["composite_score"], sc["signal"],
-                    sc["risk_score"],      sc["risk_label"],
-                    sc["sharpe_ratio"],    sc["sortino_ratio"],
-                    sc["max_drawdown"],    sc["std_dev"],
-                    sc["consistency_pct"], sc["signal_layers"],
-                    sc["expected_1y_min"], sc["expected_1y_max"],
-                    sc["expected_3y_min"], sc["expected_3y_max"],
-                    sc["expected_5y_min"], sc["expected_5y_max"],
-                    sc2["score"], sc2["signal"], json.dumps(sc2["layers"]),
-                    sc3["score"], sc3["signal"], json.dumps(sc3["layers"]),
-                    peer["q"] if peer else None,
-                ]
-            )
-            upserted += 1
-        except Exception as e:
-            log.warning("Tier 1 failed for %s: %s", fund.get("scheme_code"), e)
-            errors += 1
+                live = sc3 if ENGINE_VERSION == "3" else sc2 if ENGINE_VERSION == "2" else None
+                if live and equity_like:
+                    sc["composite_score"] = live["score"]
+                    sc["signal"]          = live["signal"]
+                    sc["signal_layers"]   = json.dumps(live["layers"])
+                elif not equity_like:
+                    sc["composite_score"] = sc3["score"]
+                    sc["signal"]          = sc3["signal"]
+                    sc["signal_layers"]   = json.dumps(sc3["layers"])
+
+                tagline = make_tagline(
+                    {**fund, "risk_label": sc["risk_label"]}, sc["signal"], peer,
+                    use_metrics=(ENGINE_VERSION in ("2", "3")) or not equity_like,
+                    use_rel=(ENGINE_VERSION == "3") and equity_like)
+                await d1_run(session,
+                    """INSERT INTO ai_recommendations
+                         (scheme_code, composite_score, signal, risk_score, risk_label,
+                          sharpe_ratio, sortino_ratio, max_drawdown, std_dev,
+                          consistency_pct, signal_layers,
+                          expected_1y_min, expected_1y_max,
+                          expected_3y_min, expected_3y_max,
+                          expected_5y_min, expected_5y_max,
+                          composite_score_v2, signal_v2, layers_v2,
+                          composite_score_v3, signal_v3, layers_v3, peer_quartile, tagline,
+                          generated_at)
+                       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,datetime('now'))
+                       ON CONFLICT(scheme_code) DO UPDATE SET
+                         composite_score=excluded.composite_score,
+                         signal=excluded.signal,
+                         risk_score=excluded.risk_score,
+                         risk_label=excluded.risk_label,
+                         sharpe_ratio=excluded.sharpe_ratio,
+                         sortino_ratio=excluded.sortino_ratio,
+                         max_drawdown=excluded.max_drawdown,
+                         std_dev=excluded.std_dev,
+                         consistency_pct=excluded.consistency_pct,
+                         signal_layers=excluded.signal_layers,
+                         expected_1y_min=excluded.expected_1y_min,
+                         expected_1y_max=excluded.expected_1y_max,
+                         expected_3y_min=excluded.expected_3y_min,
+                         expected_3y_max=excluded.expected_3y_max,
+                         expected_5y_min=excluded.expected_5y_min,
+                         expected_5y_max=excluded.expected_5y_max,
+                         composite_score_v2=excluded.composite_score_v2,
+                         signal_v2=excluded.signal_v2,
+                         layers_v2=excluded.layers_v2,
+                         composite_score_v3=excluded.composite_score_v3,
+                         signal_v3=excluded.signal_v3,
+                         layers_v3=excluded.layers_v3,
+                         peer_quartile=excluded.peer_quartile,
+                         tagline=excluded.tagline,
+                         generated_at=excluded.generated_at""",
+                    [
+                        fund["scheme_code"],
+                        sc["composite_score"], sc["signal"],
+                        sc["risk_score"],      sc["risk_label"],
+                        sc["sharpe_ratio"],    sc["sortino_ratio"],
+                        sc["max_drawdown"],    sc["std_dev"],
+                        sc["consistency_pct"], sc["signal_layers"],
+                        sc["expected_1y_min"], sc["expected_1y_max"],
+                        sc["expected_3y_min"], sc["expected_3y_max"],
+                        sc["expected_5y_min"], sc["expected_5y_max"],
+                        sc2["score"], sc2["signal"], json.dumps(sc2["layers"]),
+                        sc3["score"], sc3["signal"], json.dumps(sc3["layers"]),
+                        peer["q"] if peer else None,
+                        tagline,
+                    ]
+                )
+                counts["ok"] += 1
+            except Exception as e:
+                log.warning("Tier 1 failed for %s: %s", fund.get("scheme_code"), e)
+                counts["err"] += 1
+
+    for i in range(0, len(rows), 1000):
+        await asyncio.gather(*(score_one(f) for f in rows[i:i + 1000]))
+        log.info("Tier 1 progress: %d/%d", min(i + 1000, len(rows)), len(rows))
+    upserted, errors = counts["ok"], counts["err"]
+    log.info("Scored by rule set: %s", dict(kinds))
 
     _report_engine_comparison(moves, upserted, with_metrics, "v1", "v2")
     _report_engine_comparison(moves23, upserted, with_bench, "v2", "v3",
