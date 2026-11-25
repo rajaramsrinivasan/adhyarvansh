@@ -511,12 +511,12 @@ async function trackRoute(request, env, method) {
   if (!type) return err('Bad event', 400)
   const ua = request.headers.get('User-Agent') || ''
   const platform = /Mobi|Android|iPhone|iPad/i.test(ua) ? 'mobile' : 'desktop'
-  await ensureEvents(env)
+  try { await ensureEvents(env) } catch (e) { return ok({ ok: false }) }
   // Ignore repeats of the same event within a minute (double fires, reloads)
-  await sqlRun(env,
+  try { await sqlRun(env,
     "INSERT INTO user_events (user_id, type, platform) SELECT ?1, ?2, ?3 " +
     "WHERE NOT EXISTS (SELECT 1 FROM user_events WHERE user_id = ?1 AND type = ?2 AND ts > datetime('now','-60 seconds'))",
-    [String(user.sub), type, platform])
+    [String(user.sub), type, platform]) } catch (e) { return ok({ ok: false }) }
   return ok({ ok: true })
 }
 
@@ -536,7 +536,9 @@ async function adminUsers(request, env) {
   await requireAdmin(request, env)
   const key = env.SUPABASE_SERVICE_KEY
   if (!key) return err('Service key not configured', 500)
-  await ensureEvents(env)
+  // Reading must keep working even when D1 writes are blocked (daily free-tier limit),
+  // so creating the table is best-effort and a missing table just means no counts yet.
+  try { await ensureEvents(env) } catch (e) { console.warn('user_events setup skipped:', e.message) }
 
   // All accounts from Supabase Auth (paged)
   const accounts = []
@@ -550,7 +552,8 @@ async function adminUsers(request, env) {
     if (list.length < 1000) break
   }
 
-  const ev = await sql(env,
+  const safe = async function (q) { try { return await sql(env, q) } catch (e) { return [] } }
+  const ev = await safe(
     "SELECT user_id, " +
     "SUM(type='login') AS logins, SUM(type='session') AS sessions, " +
     "SUM(type='login' AND ts >= datetime('now','-30 days')) AS logins30, " +
@@ -561,10 +564,10 @@ async function adminUsers(request, env) {
     "FROM user_events GROUP BY user_id")
   const byId = {}
   ev.forEach(function (e) { byId[e.user_id] = e })
-  const daily = await sql(env,
+  const daily = await safe(
     "SELECT date(ts) AS day, SUM(type='session') AS sessions, COUNT(DISTINCT user_id) AS users " +
     "FROM user_events WHERE ts >= datetime('now','-30 days') GROUP BY day ORDER BY day")
-  const since = await sql(env, 'SELECT MIN(ts) AS t FROM user_events')
+  const since = await safe('SELECT MIN(ts) AS t FROM user_events')
 
   const users = accounts.map(function (a) {
     const e = byId[a.id] || {}

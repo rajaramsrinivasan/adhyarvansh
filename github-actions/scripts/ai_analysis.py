@@ -604,8 +604,25 @@ async def run_tier1(session):
     with_bench = 0
     kinds = Counter()
     peers = peer_quartiles([f for f in rows if f.get("category") in SCORED_BY_EQUITY_RULES])
-    counts = {"ok": 0, "err": 0}
+    counts = {"ok": 0, "err": 0, "same": 0}
     sem = asyncio.Semaphore(15)
+
+    # Cloudflare D1's free plan allows 100,000 row writes a day, and every upsert (plus
+    # each index it touches) counts. Skip funds whose rating has not changed.
+    prev = {}
+    try:
+        for r in await d1_query(session,
+                "SELECT scheme_code, composite_score, signal, composite_score_v2, composite_score_v3, "
+                "       tagline, peer_quartile, expected_1y_min, expected_3y_min, expected_5y_min "
+                "FROM ai_recommendations"):
+            prev[r["scheme_code"]] = (r["composite_score"], r["signal"], r["composite_score_v2"],
+                                      r["composite_score_v3"], r["tagline"], r["peer_quartile"],
+                                      r["expected_1y_min"], r["expected_3y_min"], r["expected_5y_min"])
+    except Exception as e:
+        log.warning("Could not load previous ratings, writing all: %s", e)
+
+    def _r0(x):
+        return None if x is None else round(float(x))
 
     async def score_one(fund):
         nonlocal with_metrics, with_bench
@@ -661,6 +678,15 @@ async def run_tier1(session):
                         {**fund, "risk_label": sc["risk_label"]}, sc["signal"], peer,
                         use_metrics=(ENGINE_VERSION in ("2", "3")) or not equity_like,
                         use_rel=(ENGINE_VERSION == "3") and equity_like)
+                new_key = (sc["composite_score"], sc["signal"], sc2["score"], sc3["score"],
+                           tagline, peer["q"] if peer else None,
+                           _r0(sc["expected_1y_min"]), _r0(sc["expected_3y_min"]), _r0(sc["expected_5y_min"]))
+                old = prev.get(fund["scheme_code"])
+                if old is not None and old[0] is not None and \
+                   (_r0(old[0]), old[1], _r0(old[2]), _r0(old[3]), old[4], old[5], _r0(old[6]), _r0(old[7]), _r0(old[8])) == \
+                   (_r0(new_key[0]), new_key[1], _r0(new_key[2]), _r0(new_key[3]), new_key[4], new_key[5], new_key[6], new_key[7], new_key[8]):
+                    counts["same"] += 1
+                    return
                 await d1_run(session,
                     """INSERT INTO ai_recommendations
                          (scheme_code, composite_score, signal, risk_score, risk_label,
@@ -725,6 +751,7 @@ async def run_tier1(session):
         log.info("Tier 1 progress: %d/%d", min(i + 1000, len(rows)), len(rows))
     upserted, errors = counts["ok"], counts["err"]
     log.info("Scored by rule set: %s", dict(kinds))
+    log.info("Unchanged and not rewritten (saves D1 writes): %d", counts["same"])
 
     _report_engine_comparison(moves, upserted, with_metrics, "v1", "v2")
     _report_engine_comparison(moves23, upserted, with_bench, "v2", "v3",
