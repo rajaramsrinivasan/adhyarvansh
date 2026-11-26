@@ -2,9 +2,10 @@
 send_digest_emails.py — send the industry digest to users who opted in (Settings → Market digest email).
 
 Who gets it: rows in Supabase `user_prefs` with digest_freq 'daily' or 'weekly'.
-  daily  → sent every run if last_digest_at is older than 20h  (news from the last 2 days)
+  daily  → sent every run if last_digest_at is older than 12h  (news from the last 2 days)
   weekly → sent on Mondays (or if more than 8 days late)       (news from the last 7 days)
-Content: top industry headlines (from D1 `industry_news`) + a "Your funds" strip from the user's holdings.
+Content: market and industry headlines only (from D1 `industry_news`). No personal portfolio data is ever added.
+Schedule: the workflow runs at 7:00 PM IST; the 12-hour guard below keeps it to one email a day.
 
 Secrets: CF_ACCOUNT_ID, CF_API_TOKEN, D1_DATABASE_ID, RESEND_API_KEY, SUPABASE_SERVICE_KEY
 Optional: EMAIL_FROM (default "Adhyarvansh <digest@adhyarvansh.com>")
@@ -23,9 +24,6 @@ FROM = os.environ.get("EMAIL_FROM") or "Adhyarvansh <digest@adhyarvansh.com>"
 IST = timezone(timedelta(hours=5, minutes=30))
 
 INK, VIOLET, MUTED, LINE = "#0B1033", "#7C3AED", "#5E6288", "#E6E0F7"
-SIG = {"strong_buy": ("Strong Buy", "#059669"), "buy": ("Buy", "#078F5E"), "hold": ("Hold", "#6D28D9"),
-       "watch": ("Watch", "#CC5E00"), "exit": ("Exit", "#E11D48")}
-
 def esc(s): return html.escape(str(s or ""), quote=True)
 
 def pct(v):
@@ -41,7 +39,7 @@ def when(iso):
         return ""
 
 # ─────────────────────────── email template ───────────────────────────
-def render_email(name, freq, news, funds):
+def render_email(name, freq, news):
     today = datetime.now(IST).strftime("%A, %d %B %Y")
     title = "Your weekly mutual fund digest" if freq == "weekly" else "Your daily mutual fund digest"
     hello = f"Hi {esc(name)}," if name else "Hi,"
@@ -59,21 +57,6 @@ def render_email(name, freq, news, funds):
     if not items:
         items = f'<tr><td style="padding:18px 0;border-top:1px solid {LINE};font-size:15px;color:{MUTED}">No major industry headlines this time. We will be back with the next digest.</td></tr>'
 
-    fund_rows = ""
-    for f in funds:
-        lab, col = SIG.get((f.get("signal") or "").lower(), ("—", MUTED))
-        fund_rows += f'''<tr><td style="padding:12px 0;border-top:1px solid {LINE}">
-          <div style="font-size:15px;line-height:1.35;font-weight:700;color:{INK}">{esc(f["fund_name"])}</div>
-          <div style="font-size:14px;color:{MUTED};margin-top:4px"><span style="color:{col};font-weight:700">{lab}</span> &nbsp;·&nbsp; 1Y {pct(f.get("return_1y"))}</div>
-        </td></tr>'''
-    funds_block = ""
-    if fund_rows:
-        funds_block = f'''<tr><td style="padding:8px 28px 4px">
-          <div style="font-size:19px;font-weight:800;color:{INK};padding-top:10px">Your funds</div>
-          <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin-top:8px">{fund_rows}</table>
-          <a href="{SITE}" style="display:inline-block;margin:14px 0 8px;font-size:15px;font-weight:700;color:{VIOLET};text-decoration:none">Open your portfolio &rsaquo;</a>
-        </td></tr>'''
-
     return f'''<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light only">
 <title>{esc(title)}</title></head>
@@ -86,24 +69,20 @@ def render_email(name, freq, news, funds):
     <div style="font-size:14px;color:#CFC6FF;margin-top:10px">{esc(title)} &nbsp;·&nbsp; {today}</div>
   </td></tr>
   <tr><td style="height:4px;background:#7C3AED;background-image:linear-gradient(90deg,#7C3AED,#D946EF,#06C5F0)"></td></tr>
-  <tr><td style="padding:24px 28px 4px"><div style="font-size:16px;line-height:1.5;color:{INK}">{hello} here is what moved in the fund industry{" this week" if freq == "weekly" else " lately"}.</div>
-    <div style="font-size:19px;font-weight:800;color:{INK};padding-top:20px">Industry headlines</div></td></tr>
+  <tr><td style="padding:24px 28px 4px"><div style="font-size:16px;line-height:1.5;color:{INK}">{hello} here is what moved in the markets and the fund industry{" this week" if freq == "weekly" else " today"}.</div>
+    <div style="font-size:19px;font-weight:800;color:{INK};padding-top:20px">Market and industry headlines</div></td></tr>
   <tr><td style="padding:0 28px"><table role="presentation" width="100%" cellpadding="0" cellspacing="0">{items}</table></td></tr>
-  {funds_block}
   <tr><td style="padding:18px 28px 28px;background:#FAF8FF;border-top:1px solid {LINE}">
-    <div style="font-size:12.5px;line-height:1.6;color:{MUTED}">Headlines link to their original publishers. This digest is for information only and is not investment advice. Mutual fund investments are subject to market risks.</div>
+    <div style="font-size:12.5px;line-height:1.6;color:{MUTED}">Headlines link to their original publishers. This digest contains market news only. Information only. Not investment advice. We are not SEBI-registered. Mutual fund investments are subject to market risks.</div>
     <div style="font-size:13px;margin-top:12px"><a href="{SITE}" style="color:{VIOLET};font-weight:700;text-decoration:none">Manage email preferences</a> &nbsp;·&nbsp; Settings &rsaquo; Market digest email</div>
   </td></tr>
 </table></td></tr></table></body></html>'''
 
-def render_text(name, freq, news, funds):
+def render_text(name, freq, news):
     lines = [f"Adhyarvansh — your {freq} mutual fund digest", ""]
     for n in news:
         lines += [n["title"], (n.get("summary") or ""), n["url"], ""]
-    if funds:
-        lines.append("Your funds")
-        lines += [f"- {f['fund_name']} ({(f.get('signal') or '').replace('_', ' ')}, 1Y {pct(f.get('return_1y'))})" for f in funds]
-        lines.append("")
+    lines.append("Information only. Not investment advice. We are not SEBI-registered. Mutual fund investments are subject to market risks.")
     lines.append(f"Manage preferences: {SITE}  (Settings > Market digest email)")
     return "\n".join(lines)
 
@@ -124,7 +103,7 @@ def due(row, now, force):
     last_dt = datetime.fromisoformat(last.replace("Z", "+00:00")) if last else None
     age = (now - last_dt) if last_dt else timedelta(days=999)
     if row["digest_freq"] == "daily":
-        return age > timedelta(hours=20)
+        return age > timedelta(hours=12)
     return (now.astimezone(IST).weekday() == 0 and age > timedelta(days=5)) or age > timedelta(days=8)
 
 async def load_news(d1q, session, freq, limit=7):
@@ -140,17 +119,6 @@ async def load_news(d1q, session, freq, limit=7):
         out.append(r)
         if len(out) >= limit: break
     return sorted(out, key=lambda r: r["published_at"], reverse=True)
-
-async def load_funds(d1q, session, uid):
-    ents = await sb(session, f"/rest/v1/portfolio_entries?user_id=eq.{uid}&select=scheme_code,fund_name")
-    codes = sorted({str(e["scheme_code"]) for e in ents or [] if e.get("scheme_code")})[:8]
-    if not codes: return []
-    ph = ",".join("?" * len(codes))
-    rows = await d1q(session, f"SELECT m.scheme_code,m.fund_name,m.return_1y,ai.signal FROM mf_cache m "
-                              f"LEFT JOIN ai_recommendations ai ON ai.scheme_code=m.scheme_code WHERE m.scheme_code IN ({ph})", codes)
-    names = {str(e["scheme_code"]): e["fund_name"] for e in ents}
-    for r in rows: r["fund_name"] = names.get(str(r["scheme_code"])) or r["fund_name"]
-    return rows[:5]
 
 async def send(session, to, subject, html_body, text_body):
     async with session.post("https://api.resend.com/emails",
@@ -189,9 +157,8 @@ async def main():
                 if not email or (a.only and email.lower() != a.only.lower()): continue
                 name = ((u.get("user_metadata") or {}).get("name") or (u.get("user_metadata") or {}).get("full_name") or "").split(" ")[0]
                 news = await load_news(d1q, s, row["digest_freq"])
-                funds = await load_funds(d1q, s, row["user_id"])
                 subject = ("Your weekly mutual fund digest" if row["digest_freq"] == "weekly" else "Your daily mutual fund digest") + (f": {news[0]['title'][:60]}" if news else "")
-                body, text = render_email(name, row["digest_freq"], news, funds), render_text(name, row["digest_freq"], news, funds)
+                body, text = render_email(name, row["digest_freq"], news), render_text(name, row["digest_freq"], news)
                 if a.dry_run:
                     open(f"preview/{row['user_id'][:8]}.html", "w").write(body); log.info("preview written for %s", row["user_id"][:8]); continue
                 await send(s, email, subject, body, text)
