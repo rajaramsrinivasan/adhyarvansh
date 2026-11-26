@@ -2,7 +2,7 @@ name: Industry digest emails
 
 on:
   schedule:
-    - cron: '0 4 * * *'    # 9:30 AM IST daily; weekly subscribers are sent on Mondays
+    - cron: '30 13 * * *'   # 7:00 PM IST daily (13:30 UTC); weekly subscribers are sent on Mondays
   workflow_dispatch:
     inputs:
       only:
