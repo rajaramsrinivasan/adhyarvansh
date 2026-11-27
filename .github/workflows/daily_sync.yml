@@ -2,18 +2,42 @@ name: Daily MF Sync + AI Analysis
 
 on:
   schedule:
-    - cron: '5 0 * * *'   # 05:35 AM IST daily (00:05 UTC, just after D1's daily write quota resets)
+    # GitHub drops or delays scheduled runs under load (worst at the top of the
+    # hour). So: one run shortly after D1's daily write quota resets at 00:00 UTC
+    # (off the :00/:05 peak), plus a backup two hours later. The 'guard' job skips
+    # the backup when a run already succeeded or is running in the last 16 hours.
+    - cron: '23 0 * * *'   # 05:53 AM IST
+    - cron: '47 2 * * *'   # 08:17 AM IST (backup)
   workflow_dispatch:
 
 permissions:
   contents: read
+  actions: read
 
 concurrency:
   group: daily-mf-sync
   cancel-in-progress: false
 
 jobs:
+  guard:
+    runs-on: ubuntu-latest
+    outputs:
+      skip: ${{ steps.check.outputs.skip }}
+    steps:
+      - id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [ "${{ github.event_name }}" != "schedule" ]; then echo "skip=false" >> "$GITHUB_OUTPUT"; exit 0; fi
+          since=$(date -u -d '16 hours ago' +%Y-%m-%dT%H:%M:%SZ)
+          n=$(gh api "repos/${{ github.repository }}/actions/workflows/daily_sync.yml/runs?per_page=30&created=>=$since" \
+            --jq '[.workflow_runs[] | select(.id != ${{ github.run_id }}) | select(.status != "completed" or .conclusion == "success")] | length')
+          echo "recent runs: $n"
+          if [ "${n:-0}" -gt 0 ]; then echo "skip=true" >> "$GITHUB_OUTPUT"; else echo "skip=false" >> "$GITHUB_OUTPUT"; fi
+
   daily-run:
+    needs: guard
+    if: needs.guard.outputs.skip != 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 150   # all active schemes (~15-20k) instead of equity/hybrid only
 
